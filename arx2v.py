@@ -217,7 +217,8 @@ def unroll_loops(lines):
             unrolled_body = unroll_loops(body)
             for val in range(start, end + 1):
                 for b_line in unrolled_body:
-                    new_line = re.sub(r"\b(\w+)_All\b", lambda m: m.group(1) + "_" + str(val), b_line)
+                    new_line = re.sub(r"_" + var + r"\b", "_" + str(val), b_line)
+                    new_line = re.sub(r"\b(\w+)_All\b", lambda m: m.group(1) + "_" + str(val), new_line)
                     new_line = re.sub(r"\b" + var + r"\b", str(val), new_line)
                     out_lines.append(new_line)
         else: out_lines.append(line); i += 1
@@ -770,7 +771,7 @@ COMMANDS
 TIP: All signals must be declared before use."""
 
 def start_repl():
-    print("Welcome to Arx2V compiler v1.0")
+    print("Welcome to Arx2V compiler v1.1")
     print("Commands: compile <file> | generate testbench for <file> | syntaxes | exit")
     print()
     while True:
