@@ -86,6 +86,8 @@ def translate_lhs(lhs):
     return re.sub(r"\[bits\s+([^\]]+)-([^\]]+)\]", r"[\1:\2]", lhs)
 
 def translate_expr(expr, target_type, signal_types, line_num=None):
+    if re.search(r"\d+'[dDhHbBoO]", expr):
+        raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Verilog constant syntax not allowed in Arx ('{expr}'). Use decimal numbers only.")
     py_expr = expr.replace(".", "_") # Interfaces (bundles)
     py_expr = py_expr.replace("bitwAnd", "&").replace("bitwOr", "|").replace("bitwXor", "^").replace("bitwNot", "~")
     py_expr = py_expr.replace("logAnd", " and ").replace("logOr", " or ").replace("logNot", " not ")
@@ -197,7 +199,9 @@ def translate_mux(expr, target_t, signal_types, line_num=None):
         verilog_opts.append(v_opt)
         
     ternary = verilog_opts[-1]
-    for j in range(len(verilog_opts)-2, -1, -1): ternary = f"({sel} == {j}) ? {verilog_opts[j]} : {ternary}"
+    for j in range(len(verilog_opts)-2, -1, -1):
+        cmp_const = f"{sel_type.width}'d{j}"
+        ternary = f"({sel} == {cmp_const}) ? {verilog_opts[j]} : {ternary}"
     return ternary, mux_warnings
 
 def unroll_loops(lines):
@@ -242,8 +246,9 @@ def merge_continuations(lines):
             ends_with_op = re.search(r'(\+|-|\*|/|&|\||\^|bitwAnd|bitwOr|bitwXor|logAnd|logOr|shf>|<shf|,|\bdefault:)\s*$', clean)
             unclosed_parens = (clean.count('(') > clean.count(')'))
             is_mux_waiting_args = clean.endswith(')') and 'mux(' in clean and 'fallbackVal:' not in clean
+            next_is_fallback = next_clean.startswith('fallbackVal:') and 'mux(' in current_line and 'fallbackVal:' not in current_line
             
-            if ends_with_op or unclosed_parens or is_mux_waiting_args:
+            if ends_with_op or unclosed_parens or is_mux_waiting_args or next_is_fallback:
                 i += 1
                 current_line = current_line.rstrip() + " " + next_line.strip()
             else:
@@ -743,6 +748,8 @@ SLICES
 LOGIC
   connect out = expr
   connect out = mux(sel) a, b, c fallbackVal: 0
+    NOTE: no inline comments inside mux options
+    NOTE: constants are decimal only (use 0, not 32'd0)
   instance Mod as name:
     port = signal
   end instance
