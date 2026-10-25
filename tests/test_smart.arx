@@ -1,0 +1,27 @@
+module TestSmart
+input:
+  clk
+  rst
+  sel [2 bits]
+  a [8 bits]
+  b [8 bits]
+output:
+  res [8 bits]
+wires:
+  state [2 bits]
+logic:
+  # 4 estados (00, 01, 10, 11), mas só 2 opções!
+  connect res = mux(sel) a, b
+  
+behavior on clk (posSen) or rst (negSen):
+  if rst == 0:
+    state = 0
+  else:
+    when state:
+      0:
+        state = 1
+      1:
+        state = 0
+      # Faltou o default!
+end behavior
+end module

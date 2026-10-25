@@ -1,0 +1,25 @@
+module DCache
+input:
+  clk
+  rst
+  we [1 bit]
+  addr_rd [10 bits]
+  addr_wr [10 bits]
+  data_in [64 bits]
+output:
+  data_out [64 bits]
+arrays:
+  mem [1024] [64 bits]
+logic:
+  # O connect de leitura foi removido! A leitura agora é síncrona.
+behavior on clk (posSen) or rst (negSen):
+  if rst == 0:
+    data_out = 0
+  else:
+    # Leitura síncrona (infere Block RAM)
+    data_out = mem[addr_rd]
+    # Escrita síncrona
+    if we == 1:
+      mem[addr_wr] = data_in
+end behavior
+end module

@@ -1,0 +1,36 @@
+module ComplexALU
+input:
+  clk
+  rst
+  a [32 bits] signed
+  b [32 bits]
+  op [2 bits]
+output:
+  res [32 bits] signed
+  err_flag [1 bit]
+wires:
+  sum [32 bits] signed
+  chopped [31 bits]
+logic:
+  # ERRO 1: Comparação entre signed (a) e unsigned (b)
+  connect err_flag = (a > b)
+  
+  # Soma normal
+  connect sum = a + b
+  
+  # ERRO 2: Fatiamento fora dos limites (sum tem 32 bits, ou seja, índices 0 a 31)
+  connect chopped = sum[bits 32-2]
+  
+behavior on clk (posSen) or rst (negSen):
+  if rst == 0:
+    res = 0
+  else:
+    when op:
+      0:
+        res = sum
+      1:
+        res = 0
+      fallbackVal:
+        res = 0
+end behavior
+end module

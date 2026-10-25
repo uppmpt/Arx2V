@@ -1,0 +1,12 @@
+module ALUSimple
+input:
+  clk
+  rst
+  a [32 bits]
+  b [32 bits]
+  op [2 bits]
+output:
+  res [32 bits]
+logic:
+  connect res = mux(op) (a + b), (a - b), (a bitwAnd b) fallbackVal: 0
+end module

@@ -1,0 +1,9 @@
+module TestConc
+input:
+  a [4 bits]
+  b [2 bits]
+output:
+  res [6 bits]
+logic:
+  connect res = conc(a[bits 3-0], b[bits 1-0])
+end module

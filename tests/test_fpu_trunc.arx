@@ -1,0 +1,19 @@
+module FP32_Trunc
+input:
+  clk
+  rst
+  a [32 bits]
+  b [32 bits]
+output:
+  result [16 bits]
+wires:
+  sum [32 bits]
+logic:
+  connect sum = a + b
+behavior on clk (posSen) or rst (negSen):
+  if rst == 0:
+    result = 0
+  else:
+    result = sum
+end behavior
+end module

@@ -1,0 +1,31 @@
+module TestMultiLine
+input:
+  clk
+  rst
+  a [8 bits]
+  b [8 bits]
+  c [8 bits]
+  sel [2 bits]
+output:
+  res [8 bits]
+wires:
+  sum [8 bits]
+  mux_res [8 bits]
+logic:
+  # Expressão matemática quebrada em 3 linhas
+  connect sum = a + 
+                b + 
+                c
+                
+  # Mux com as opções quebradas
+  connect mux_res = mux(sel)
+    a,
+    b,
+    c fallbackVal: 0
+behavior on clk (posSen) or rst (negSen):
+  if rst == 0:
+    res = 0
+  else:
+    res = sum + mux_res
+end behavior
+end module

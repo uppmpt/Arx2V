@@ -1,0 +1,92 @@
+module CacheController
+input:
+  clk
+  rst
+  cpu_req [1 bit]
+  cpu_we [1 bit]
+  cpu_addr [32 bits]
+  cpu_wdata [32 bits]
+  mem_ready [1 bit]
+  mem_rdata [32 bits]
+output:
+  cpu_rdata [32 bits]
+  cpu_ready [1 bit]
+  cpu_hit [1 bit]
+  mem_req [1 bit]
+  mem_we [1 bit]
+  mem_addr [32 bits]
+  mem_wdata [32 bits]
+wires:
+  index [2 bits]
+  offset [2 bits]
+  tag [28 bits]
+  current_tag [28 bits]
+  current_valid [1 bit]
+  is_hit [1 bit]
+  is_dirty [1 bit]
+  state [2 bits]
+arrays:
+  data_ram [4] [32 bits]
+  tag_ram [4] [28 bits]
+  valid_ram [4] [1 bit]
+  dirty_ram [4] [1 bit]
+logic:
+  # Fatiamento do endereço
+  connect index = cpu_addr[bits 3-2]
+  connect offset = cpu_addr[bits 1-0]
+  connect tag = cpu_addr[bits 31-4]
+
+  # Leitura das memórias do cache (lookup)
+  connect current_tag = tag_ram[index]
+  connect current_valid = valid_ram[index]
+  connect is_dirty = dirty_ram[index]
+
+  # Lógica de Hit/Miss
+  connect is_hit = current_valid bitwAnd (current_tag == tag)
+
+  # Leitura de dados para a CPU (se der hit)
+  connect cpu_rdata = data_ram[index]
+
+  # Sinais para a memória principal
+  connect mem_req = (state == 2)
+  connect mem_we = (state == 3)
+  connect mem_addr = cpu_addr
+  connect mem_wdata = data_ram[index]
+behavior on clk (posSen) or rst (negSen):
+  if rst == 0:
+    state = 0
+    cpu_ready = 0
+    cpu_hit = 0
+  else:
+    when state:
+      0:
+        cpu_ready = 0
+        cpu_hit = 0
+        if cpu_req == 1:
+          state = 1
+      1:
+        if is_hit == 1:
+          cpu_hit = 1
+          cpu_ready = 1
+          state = 0
+          if cpu_we == 1:
+            data_ram[index] = cpu_wdata
+            dirty_ram[index] = 1
+        else:
+          state = 2
+      2:
+        if mem_ready == 1:
+          data_ram[index] = mem_rdata
+          tag_ram[index] = tag
+          valid_ram[index] = 1
+          dirty_ram[index] = 0
+          cpu_hit = 1
+          cpu_ready = 1
+          state = 0
+      3:
+        if mem_ready == 1:
+          state = 0
+      fallbackVal:
+        state = 0
+end behavior
+end module
