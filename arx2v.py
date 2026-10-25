@@ -216,7 +216,10 @@ def unroll_loops(lines):
                 else: break
             unrolled_body = unroll_loops(body)
             for val in range(start, end + 1):
-                for b_line in unrolled_body: out_lines.append(re.sub(r"\b" + var + r"\b", str(val), b_line))
+                for b_line in unrolled_body:
+                    new_line = re.sub(r"\b(\w+)_All\b", lambda m: m.group(1) + "_" + str(val), b_line)
+                    new_line = re.sub(r"\b" + var + r"\b", str(val), new_line)
+                    out_lines.append(new_line)
         else: out_lines.append(line); i += 1
     return out_lines
 
@@ -261,6 +264,17 @@ def transpile_single_module(lines):
     for i, raw_line in enumerate(lines):
         line = raw_line.split("#")[0].strip()
         if not line: continue
+        m_for = re.match(r"^(forInput|forOutput|forWire)\s+(\w+)\s*\[(\d+)\]\s*\[(\d+)\s*bits?\](\s+signed)?(\s*valid\s*\((\d+)\.\.(\d+)\))?$", line)
+        if m_for:
+            kind, name, count, width, signed, valid, vmin, vmax = m_for.groups()
+            count, width = int(count), int(width)
+            for k in range(count):
+                port_name = name + "_" + str(k)
+                signal_types[port_name] = ArxType(width, bool(signed))
+                if vmin is not None:
+                    signal_types[port_name + "_invalid"] = ArxType(1, False)
+                    extra_functions.append("  wire " + port_name + "_invalid;\n  assign " + port_name + "_invalid = (" + port_name + " < " + vmin + ") || (" + port_name + " > " + vmax + ");")
+            continue
         match_width = re.match(r"^([\w\.]+)\s*\[(\d+) bits?\](\s*signed)?(\s*valid\s*\((\d+)\.\.(\d+)\))?$", line)
         if match_width:
             name = match_width.group(1).replace('.', '_')
@@ -307,11 +321,10 @@ def transpile_single_module(lines):
                     behavior_drivers.add(base_lhs)
         elif line.startswith("connect"):
             lhs = line.split("=")[0].replace("connect", "").strip()
-            base_lhs = lhs.split("[")[0]
-            if base_lhs:
-                if base_lhs in logic_drivers:
-                    raise ValueError(f"Hardware collision: Multiple 'connect' drivers for '{base_lhs}'.")
-                logic_drivers.add(base_lhs)
+            if lhs:
+                if lhs in logic_drivers:
+                    raise ValueError(f"Hardware collision: Multiple 'connect' drivers for '{lhs}'.")
+                logic_drivers.add(lhs)
 
     # Check for signals assigned in multiple DISTINCT behavior blocks
     seen_signals = set()
@@ -360,6 +373,22 @@ def transpile_single_module(lines):
             logic_verilog.append(f"  {instance_mod} {instance_name} (\n    {',\n    '.join(instance_ports)}\n  );")
             current_mode = "logic"
         elif current_mode in ["input", "output", "wires"]:
+            m_for = re.match(r"^(forInput|forOutput|forWire)\s+(\w+)\s*\[(\d+)\]\s*\[(\d+)\s*bits?\](\s+signed)?$", line)
+            if m_for:
+                kind, name, count, width, signed = m_for.groups()
+                count, width = int(count), int(width)
+                sig_prefix = "signed " if signed else ""
+                for k in range(count):
+                    port_name = name + "_" + str(k)
+                    if current_mode == "input":
+                        inputs.append("input " + sig_prefix + "[" + str(width-1) + ":0] " + port_name)
+                    elif current_mode == "output":
+                        prefix = "output reg" if port_name in behavior_drivers else "output"
+                        outputs.append(prefix + " " + sig_prefix + "[" + str(width-1) + ":0] " + port_name)
+                    elif current_mode == "wires":
+                        prefix = "reg" if port_name in behavior_drivers else "wire"
+                        wires.append(prefix + " " + sig_prefix + "[" + str(width-1) + ":0] " + port_name + ";")
+                continue
             line = re.sub(r"\s*valid\s*\(\d+\.\.\d+\)|\bsigned\b", "", line)
             match = re.match(r"^([\w\.]+)\s*\[(\d+) bits?\]$", line)
             if match:
@@ -378,7 +407,10 @@ def transpile_single_module(lines):
             else: raise ValueError(f"Syntax error on line {line_num}: Unrecognized statement in '{current_mode}' block: '{line}'")
         elif current_mode == "arrays":
             match = re.match(r"^(\w+)\s*\[(\d+)\]\s*\[(\d+) bits?\](\s*signed)?$", line)
-            if match: arrays.append(f"reg {'signed ' if match.group(4) else ''}[{int(match.group(3))-1}:0] {match.group(1)} [0:{int(match.group(2))-1}];")
+            if match:
+                arr_name = match.group(1)
+                prefix = "reg" if arr_name in behavior_drivers else "wire"
+                arrays.append(f"{prefix} {'signed ' if match.group(4) else ''}[{int(match.group(3))-1}:0] {arr_name} [0:{int(match.group(2))-1}];")
             else: raise ValueError(f"Syntax error on line {line_num}")
         elif current_mode == "instance":
             match = re.match(r"^(\w+)\s*=\s*(.+)$", line)
@@ -685,6 +717,12 @@ TYPES
   name [N bits] signed          signed
   name [N bits] valid (a..b)    domain check -> auto <name>_invalid
   name [SIZE] [N bits]          array / BRAM
+  forInput a [N] [M bits]       generates a_0..a_(N-1) as inputs
+  forOutput a [N] [M bits]      generates a_0..a_(N-1) as outputs
+  forWire a [N] [M bits]        generates a_0..a_(N-1) as wires
+
+LOOP VARIABLES (inside for i in a..b)
+  a_All                         expands to a_<i> (a_0, a_1, ...)
 
 SENSITIVITY (behavior on)
   (posSen)   rising edge
