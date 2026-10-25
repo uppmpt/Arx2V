@@ -1,0 +1,7 @@
+*.v
+obj_dir/
+*.bak
+*_backup*.py
+*_conflitos*.py
+__pycache__/
+*.pyc
