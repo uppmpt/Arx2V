@@ -1,0 +1,86 @@
+module rv64i_decoder
+
+input:
+    inst [32 bits]
+
+output:
+    rd [5 bits]
+    rs1 [5 bits]
+    rs2 [5 bits]
+    alu_op [4 bits]
+    we [1 bit]
+    mem_read [1 bit]
+    mem_write [1 bit]
+
+wires:
+    opcode [7 bits]
+    funct3 [3 bits]
+    funct7 [7 bits]
+
+logic:
+    connect opcode = inst[bits 6-0]
+    connect rd = inst[bits 11-7]
+    connect funct3 = inst[bits 14-12]
+    connect rs1 = inst[bits 19-15]
+    connect rs2 = inst[bits 24-20]
+    connect funct7 = inst[bits 31-25]
+
+behavior on comb:
+    # Valores padrão para tudo
+    alu_op = 0
+    we = 0
+    mem_read = 0
+    mem_write = 0
+
+    when opcode:
+        51: # R-Type
+            we = 1
+            when funct3:
+                0:
+                    if (funct7 == 32):
+                        alu_op = 1 # SUB
+                    else:
+                        alu_op = 0 # ADD
+                7: alu_op = 2 # AND
+                6: alu_op = 3 # OR
+                4: alu_op = 4 # XOR
+                2: alu_op = 5 # SLT
+                fallbackVal:
+                    alu_op = 0
+        19: # I-Type
+            we = 1
+            when funct3:
+                0: alu_op = 0 # ADDI
+                7: alu_op = 2 # ANDI
+                6: alu_op = 3 # ORI
+                4: alu_op = 4 # XORI
+                fallbackVal:
+                    alu_op = 0
+        3: # LOAD
+            we = 1
+            mem_read = 1
+            alu_op = 0
+        35: # STORE
+            mem_write = 1
+            alu_op = 0
+        55: # LUI
+            we = 1
+            alu_op = 0
+        23: # AUIPC
+            we = 1
+            alu_op = 0
+        111: # JAL
+            we = 1
+            alu_op = 0
+        103: # JALR
+            we = 1
+            alu_op = 0
+        99: # BRANCH
+            alu_op = 1
+        fallbackVal:
+            we = 0
+            mem_read = 0
+            mem_write = 0
+end behavior
+
+end module
