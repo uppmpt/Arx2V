@@ -341,6 +341,7 @@ def transpile_single_module(lines):
             seen_signals.add(sig)
 
     current_mode, block_stack, instance_mod, instance_name, instance_ports = "global", [], "", "", []
+    is_comb_block = False
     for i, raw_line in enumerate(lines):
         line_num, line, indent = i + 1, raw_line.split('#')[0].strip(), indent_levels[i]
         if not line or line.startswith("#"): continue
@@ -353,8 +354,11 @@ def transpile_single_module(lines):
             current_mode = "behavior"
             sens_str = re.sub(r"(\w+)\s*\(posSen\)", r"posedge \1", re.search(r"^behavior on (.*):$", line).group(1))
             sens_str = re.sub(r"(\w+)\s*\(negSen\)", r"negedge \1", sens_str)
-            sens_str = re.sub(r"(\w+)\s*\(highSen\)", r"\1", sens_str)
-            sens_str = re.sub(r"(\w+)\s*\(lowSen\)", r"\1", sens_str)
+            sens_str = re.sub(r"(\w+)\s*\(highSen\)", r"posedge \1", sens_str)
+            sens_str = re.sub(r"(\w+)\s*\(lowSen\)", r"negedge \1", sens_str)
+            is_comb_block = (sens_str.strip() == "comb")
+            if is_comb_block:
+                sens_str = "*"
             behavior_verilog.append(f"always @({sens_str}) begin")
         elif line == "end behavior":
             while block_stack:
@@ -367,6 +371,7 @@ def transpile_single_module(lines):
                     behavior_verilog.append("    " + ("  " * (len(block_stack) - 1)) + "endcase")
                 block_stack.pop()
             behavior_verilog.append("end")
+            is_comb_block = False
             current_mode = "logic"
         elif line == "end module": current_mode = "done"
         elif line.startswith("instance"):
@@ -493,7 +498,8 @@ def transpile_single_module(lines):
                         v_expr, v_type = translate_expr(t_expr, target_t, signal_types, line_num)
                         if v_type.width > target_t.width:
                             warnings.append(f"Warning: Line {line_num}: Truncation in '{t_expr}' ({v_type.width} -> {target_t.width}).")
-                    behavior_verilog.append(f"      {translate_lhs(t_sig)} <= {v_expr};")
+                    assign_op = "=" if is_comb_block else "<="
+                    behavior_verilog.append(f"      {translate_lhs(t_sig)} {assign_op} {v_expr};")
                     behavior_verilog.append(f"{base_indent}end")
                 else:
                     behavior_verilog.append(f"{base_indent}{'default' if branch_val == 'fallbackVal' else branch_val}: begin")
@@ -530,7 +536,8 @@ def transpile_single_module(lines):
                     v_expr, v_type = translate_expr(expr, target_t, signal_types, line_num)
                     if v_type.width > target_t.width:
                         warnings.append(f"Warning: Line {line_num}: Truncation in '{expr}' ({v_type.width} -> {target_t.width}).")
-                behavior_verilog.append("    " + ("  " * len(block_stack)) + f"{translate_lhs(target_sig)} <= {v_expr};")
+                assign_op = "=" if is_comb_block else "<="
+                behavior_verilog.append("    " + ("  " * len(block_stack)) + f"{translate_lhs(target_sig)} {assign_op} {v_expr};")
 
     for sig in auto_inputs:
         if not any(sig in inp.split() for inp in inputs): inputs.append(f"input {sig}")
@@ -733,8 +740,9 @@ LOOP VARIABLES (inside for i in a..b)
 SENSITIVITY (behavior on)
   (posSen)   rising edge
   (negSen)   falling edge
-  (highSen)  level high
-  (lowSen)   level low
+  (highSen)  posedge (asynchronous reset)
+  (lowSen)   negedge (asynchronous reset)
+  comb       combinational (always @(*), blocking assignments =)
 
 OPERATORS
   bitwAnd / bitwOr / bitwXor / bitwNot     bitwise (&, |, ^, ~)
