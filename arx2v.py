@@ -91,7 +91,7 @@ def translate_expr(expr, target_type, signal_types, line_num=None):
     py_expr = expr.replace(".", "_") # Interfaces (bundles)
     py_expr = py_expr.replace("bitwAnd", "&").replace("bitwOr", "|").replace("bitwXor", "^").replace("bitwNot", "~")
     py_expr = py_expr.replace("logAnd", " and ").replace("logOr", " or ").replace("logNot", " not ")
-    py_expr = py_expr.replace("≠", "!=").replace("shf>", ">>").replace("<shf", "<<")
+    py_expr = py_expr.replace("≠", "!=").replace("≥", ">=").replace("≤", "<=").replace("shf>", ">>").replace("<shf", "<<")
     py_expr = re.sub(r"\[bits\s+([^\]]+)-([^\]]+)\]", r"[\1:\2]", py_expr)
     py_expr = re.sub(r"\[bit\s+([^\]]+)\]", r"[\1]", py_expr)
     try:
@@ -752,6 +752,7 @@ SENSITIVITY (behavior on)
 OPERATORS
   bitwAnd / bitwOr / bitwXor / bitwNot     bitwise (&, |, ^, ~)
   logAnd / logOr / logNot                  logical (&&, ||, !)
+  == / ≠ / < / > / ≤ / ≥                  comparison
   shf> N / <shf N                          shift right / left
 
 SLICES
