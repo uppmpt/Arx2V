@@ -161,7 +161,12 @@ def translate_expr(expr, target_type, signal_types, line_num=None):
                                 items.append(f"({arg}[{i}] ? {out_w}'d{i} : ")
                         return "".join(items) + f"{out_w}'d0" + ")" * w
             return ast.unparse(node)
-        return unparse_verilog(tree.body, inferred), inferred
+        expr_str = unparse_verilog(tree.body, inferred)
+        # Auto width-extension (zero padding) para evitar WIDTHEXPAND no Verilator
+        if target_type is not None and inferred.width < target_type.width:
+            diff = target_type.width - inferred.width
+            expr_str = f"{{{diff}'d0, {expr_str}}}"
+        return expr_str, inferred
     except SyntaxError: raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Invalid expression syntax: '{expr}'")
     except Exception as e: raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Expression error: {e}")
 
@@ -786,7 +791,7 @@ COMMANDS
 TIP: All signals must be declared before use."""
 
 def start_repl():
-    print("Welcome to Arx2V compiler v1.3")
+    print("Welcome to Arx2V compiler v1.4")
     print("Commands: compile <file> | generate testbench for <file> | syntaxes | exit")
     print()
     while True:
