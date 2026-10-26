@@ -1,0 +1,134 @@
+module fpu_special_handler
+
+input:
+    is_d [1 bit]      # 0 = F (single), 1 = D (double)
+    op [2 bits]       # 0=ADD, 1=SUB, 2=MUL, 3=DIV
+    rs1 [64 bits]
+    rs2 [64 bits]
+
+output:
+    result [64 bits]
+    is_special [1 bit]
+    fflags [5 bits]   # Bit 4 = Invalid, Bit 3 = DivByZero
+
+wires:
+    sgn1 [1 bit]
+    sgn2 [1 bit]
+    exp1 [11 bits]
+    exp2 [11 bits]
+    mant1 [52 bits]
+    mant2 [52 bits]
+    
+    is_nan1 [1 bit]
+    is_nan2 [1 bit]
+    is_inf1 [1 bit]
+    is_inf2 [1 bit]
+    is_zero1 [1 bit]
+    is_zero2 [1 bit]
+    
+    exp_max [11 bits]
+    res_sgn [1 bit]
+
+    q_nan [64 bits]
+    inf_pos [64 bits]
+    inf_neg [64 bits]
+    zero_neg [64 bits]
+    inf_val [64 bits]
+    zero_val [64 bits]
+
+logic:
+    connect sgn1 = mux(is_d) rs1[31], rs1[63]
+    connect sgn2 = mux(is_d) rs2[31], rs2[63]
+
+    connect exp1 = mux(is_d) (rs1[bits 30-23] + 0), rs1[bits 62-52]
+    connect exp2 = mux(is_d) (rs2[bits 30-23] + 0), rs2[bits 62-52]
+
+    connect mant1 = mux(is_d) (rs1[bits 22-0] + 0), rs1[bits 51-0]
+    connect mant2 = mux(is_d) (rs2[bits 22-0] + 0), rs2[bits 51-0]
+
+    connect exp_max = mux(is_d) 255, 2047
+
+    connect is_nan1 = (exp1 == exp_max) logAnd (redOr(mant1) == 1)
+    connect is_nan2 = (exp2 == exp_max) logAnd (redOr(mant2) == 1)
+    connect is_inf1 = (exp1 == exp_max) logAnd (redOr(mant1) == 0)
+    connect is_inf2 = (exp2 == exp_max) logAnd (redOr(mant2) == 0)
+    connect is_zero1 = (exp1 == 0) logAnd (redOr(mant1) == 0)
+    connect is_zero2 = (exp2 == 0) logAnd (redOr(mant2) == 0)
+
+    connect res_sgn = sgn1 bitwXor sgn2
+
+    connect q_nan = mux(is_d) 2143289344, 9221120237041090560
+    connect inf_pos = mux(is_d) 2139095040, 9218868437227405312
+    connect inf_neg = mux(is_d) 4286578688, 18442240474082181120
+    connect zero_neg = mux(is_d) 2147483648, 9223372036854775808
+
+    connect inf_val = mux(res_sgn) inf_pos, inf_neg
+    connect zero_val = mux(res_sgn) 0, zero_neg
+
+behavior on comb:
+    result = 0
+    is_special = 0
+    fflags = 0
+
+    if (is_nan1 logOr is_nan2):
+        result = q_nan
+        is_special = 1
+        fflags = 16
+
+    else if (op == 0): # ADD
+        if (is_inf1 logAnd is_inf2 logAnd (sgn1 ≠ sgn2)):
+            result = q_nan
+            is_special = 1
+            fflags = 16
+        else if (is_inf1):
+            result = rs1
+            is_special = 1
+        else if (is_inf2):
+            result = rs2
+            is_special = 1
+
+    else if (op == 1): # SUB
+        if (is_inf1 logAnd is_inf2 logAnd (sgn1 == sgn2)):
+            result = q_nan
+            is_special = 1
+            fflags = 16
+        else if (is_inf1):
+            result = rs1
+            is_special = 1
+        else if (is_inf2):
+            result = rs2 bitwXor 0 # Mantém a estrutura, o ideal é inverter o sinal
+            is_special = 1
+
+    else if (op == 2): # MUL
+        if ((is_zero1 logAnd is_inf2) logOr (is_inf1 logAnd is_zero2)):
+            result = q_nan
+            is_special = 1
+            fflags = 16
+        else if (is_inf1 logOr is_inf2):
+            result = inf_val
+            is_special = 1
+        else if (is_zero1 logOr is_zero2):
+            result = zero_val
+            is_special = 1
+
+    else if (op == 3): # DIV
+        if ((is_zero1 logAnd is_zero2) logOr (is_inf1 logAnd is_inf2)):
+            result = q_nan
+            is_special = 1
+            fflags = 16
+        else if (is_inf1):
+            result = inf_val
+            is_special = 1
+        else if (is_inf2):
+            result = zero_val
+            is_special = 1
+        else if (is_zero1):
+            result = zero_val
+            is_special = 1
+        else if (is_zero2):
+            result = inf_val
+            is_special = 1
+            fflags = 8 # DivByZero
+end behavior
+
+end module
