@@ -1,5 +1,7 @@
 
 # Arx2V - The Hardware Description Language for Humans and AI
+![Arx Demo](demo.gif)
+
 
 **Arx** is a new Hardware Description Language (HDL) designed to be intuitive for visual architects and safe for AI-generated code. **Arx2V** is its compiler - a single Python file (no LLVM, no Scala, no C++) that translates Arx into clean, synthesizable Verilog-2001.
 
