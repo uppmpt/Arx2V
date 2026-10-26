@@ -3,7 +3,7 @@
 ![Arx Demo](demo.gif)
 
 
-**Arx** is a new Hardware Description Language (HDL) designed to be intuitive for visual architects and safe for AI-generated code. **Arx2V** is its compiler - a single Python file (no LLVM, no Scala, no C++) that translates Arx into clean, synthesizable Verilog-2001.
+**Arx** is a new Hardware Description Language (HDL) designed to be intuitive for visual architects and safe for AI-generated code. **Arx2V** is its compiler - a single Python file (no LLVM, no Scala, no C++) that translates Arx into clean, synthesizable Verilog-2001. Version 2.0 introduces a built-in simulation command (via Verilator) for a seamless hardware development experience.
 
 ## Why Arx?
 
@@ -15,6 +15,13 @@ Arx fixes this with:
 - **AI-safe guardrails**: a strict Type Checker catches width mismatches and multiple drivers *before* generating Verilog.
 - **Zero dependencies**: pure Python 3.8+. Runs on a phone.
 - **Testbench generator**: `generate testbench for <file.arx>` creates the Verilog TB automatically.
+- **Built-in Simulator (v2.0)**: `sim <file.arx>` runs the compiled Verilog through Verilator in a clean, temporary directory.
+
+
+## Prerequisites
+
+- Python 3.8+
+- **Verilator** (optional, but recommended). Arx2V generates pure Verilog, so you can use any standard toolchain (Vivado, Quartus, Yosys). However, if Verilator is installed, you can use the `sim` command to compile and simulate directly from the Arx2V REPL.
 
 ## Installation
 

@@ -791,9 +791,81 @@ COMMANDS
 
 TIP: All signals must be declared before use."""
 
+def run_simulation(arx_file, tb_file=None):
+    import subprocess, re, tempfile, shutil
+    if not os.path.exists(arx_file):
+        print(f"Error: file '{arx_file}' not found.", file=sys.stderr)
+        return
+    with open(arx_file, "r") as f:
+        source = f.read()
+    print(f"--- Compiling {arx_file} ---", file=sys.stderr)
+    try:
+        verilog_code, warnings = transpile_to_verilog(source)
+        for w in warnings: print(w, file=sys.stderr)
+    except Exception as e:
+        print(f"Compilation error: {e}", file=sys.stderr)
+        return
+    
+    dut_v = arx_file.replace(".arx", ".v")
+    with open(dut_v, "w") as f:
+        f.write(verilog_code)
+
+    if not tb_file:
+        m = re.search(r"module\s+(\w+)", source)
+        if m:
+            tb_file = f"tb_{m.group(1)}.v"
+            if not os.path.exists(tb_file):
+                print(f"Testbench '{tb_file}' not found. Generating...", file=sys.stderr)
+                try:
+                    _, tb_code = generate_tb_from_source(source)
+                    with open(tb_file, "w") as f:
+                        f.write(tb_code)
+                except Exception as e:
+                    print(f"Error generating TB: {e}", file=sys.stderr)
+                    return
+    
+    if not os.path.exists(tb_file):
+        print(f"Error: testbench '{tb_file}' not found.", file=sys.stderr)
+        return
+
+    top_module = tb_file.split("/")[-1].replace(".v", "")
+    if not top_module.startswith("tb_"): top_module = "tb_" + top_module
+
+    print(f"--- Running Verilator (silent) ---", file=sys.stderr)
+    
+    tmpdir = tempfile.mkdtemp()
+    try:
+        cmd = ["verilator", "--binary", "-j", "0", "-Wno-fatal", "--top-module", top_module, 
+               "-Mdir", tmpdir, dut_v, tb_file]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if res.returncode != 0:
+            print("Verilator error:", file=sys.stderr)
+            print(res.stderr, file=sys.stderr)
+            return
+            
+        exe = os.path.join(tmpdir, f"V{top_module}")
+        if not os.path.exists(exe):
+            print(f"Error: executable '{exe}' not found.", file=sys.stderr)
+            return
+            
+        print(f"--- Simulation Output ---", file=sys.stderr)
+        sim_res = subprocess.run([exe], capture_output=True, text=True)
+        
+        for line in sim_res.stdout.split('\n'):
+            if line.strip() and not line.startswith('-') and 'Verilator' not in line and 'Simulation Report' not in line:
+                print(line)
+                
+    except FileNotFoundError:
+        print("Error: 'verilator' not found.", file=sys.stderr)
+    except Exception as e:
+        print(f"Simulation error: {e}", file=sys.stderr)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
 def start_repl():
-    print("Welcome to Arx2V compiler v1.4")
-    print("Commands: compile <file> | generate testbench for <file> | syntaxes | exit")
+    print("Welcome to Arx2V compiler v2.0")
+    print("Commands: compile <file> | sim <file> [tb.v] | generate testbench for <file> | syntaxes | exit")
     print()
     while True:
         try:
@@ -816,6 +888,12 @@ def start_repl():
                     source = f.read()
                 print(f"\n--- COMPILING {filename} ---", file=sys.stderr)
                 handle_compilation(source)
+                continue
+            if lower.startswith("sim "):
+                args = cmd_clean.split()
+                if len(args) == 2: run_simulation(args[1])
+                elif len(args) == 3: run_simulation(args[1], args[2])
+                else: print("Usage: sim <file.arx> [tb_file.v]")
                 continue
             if lower.startswith("generate testbench for "):
                 filename = cmd_clean[len("generate testbench for "):].strip()
