@@ -12,7 +12,18 @@ class TypeChecker(ast.NodeVisitor):
     def visit_Name(self, node):
         if node.id not in self.signal_types: raise ValueError(f"Undeclared signal: '{node.id}'")
         return self.signal_types[node.id]
-    def visit_Constant(self, node): return self.target_type
+    def visit_Constant(self, node): 
+        if isinstance(node.value, int):
+            val = node.value
+            if val < 0:
+                if not self.target_type.signed:
+                    raise ValueError(f"Negative constant {val} cannot be assigned to an unsigned target.")
+                bits = (abs(val) - 1).bit_length() + 1
+            else:
+                bits = val.bit_length() if val > 0 else 1
+                if bits > self.target_type.width:
+                    return ArxType(bits, False)
+        return self.target_type
     def visit_BinOp(self, node):
         left, right = self.visit(node.left), self.visit(node.right)
         if left.signed != right.signed: raise ValueError(f"Type mismatch: '{ast.unparse(node)}' mixes signed/unsigned.")
@@ -155,17 +166,20 @@ def translate_expr(expr, target_type, signal_types, line_num=None):
                         items = []
                         if node.func.id in ["encode", "lowPencode"]:
                             for i in range(w):
-                                items.append(f"({arg}[{i}] ? {out_w}'d{i} : ")
+                                items.append(f"((({arg} >> {i}) & 1) ? {out_w}'d{i} : ")
                         else: # highPencode
                             for i in range(w-1, -1, -1):
-                                items.append(f"({arg}[{i}] ? {out_w}'d{i} : ")
+                                items.append(f"((({arg} >> {i}) & 1) ? {out_w}'d{i} : ")
                         return "".join(items) + f"{out_w}'d0" + ")" * w
             return ast.unparse(node)
         expr_str = unparse_verilog(tree.body, inferred)
-        # Auto width-extension (zero padding) para evitar WIDTHEXPAND no Verilator
+        # Auto width-extension para evitar WIDTHEXPAND no Verilator
         if target_type is not None and inferred.width < target_type.width:
             diff = target_type.width - inferred.width
-            expr_str = f"{{{diff}'d0, {expr_str}}}"
+            if inferred.signed:
+                expr_str = f"{{{{{diff}{{{expr_str}[{inferred.width-1}]}}}}, {expr_str}}}"
+            else:
+                expr_str = f"{{{diff}'d0, {expr_str}}}"
         return expr_str, inferred
     except SyntaxError: raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Invalid expression syntax: '{expr}'")
     except Exception as e: raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Expression error: {e}")
@@ -209,35 +223,42 @@ def translate_mux(expr, target_t, signal_types, line_num=None):
         ternary = f"({sel} == {cmp_const}) ? {verilog_opts[j]} : {ternary}"
     return ternary, mux_warnings
 
-def unroll_loops(lines):
-    out_lines, i = [], 0
+def unroll_loops(lines, line_map):
+    out_lines, out_map, i = [], [], 0
     while i < len(lines):
         line = lines[i]
         match = re.match(r"^(\s*)for\s+(\w+)\s+in\s+(\d+)\.\.(\d+):\s*$", line)
         if match:
             indent, var, start, end = match.groups()
             start, end, body = int(start), int(end), []
+            body_map = []
             i += 1
             while i < len(lines):
                 next_line = lines[i]
-                if next_line.strip() == "": body.append(next_line); i += 1; continue
-                if len(next_line) - len(next_line.lstrip()) > len(indent): body.append(next_line); i += 1
+                if next_line.strip() == "": body.append(next_line); body_map.append(line_map[i]); i += 1; continue
+                if len(next_line) - len(next_line.lstrip()) > len(indent): body.append(next_line); body_map.append(line_map[i]); i += 1
                 else: break
-            unrolled_body = unroll_loops(body)
+            unrolled_body, unrolled_map = unroll_loops(body, body_map)
             for val in range(start, end + 1):
-                for b_line in unrolled_body:
+                for b_idx, b_line in enumerate(unrolled_body):
                     new_line = re.sub(r"_" + var + r"\b", "_" + str(val), b_line)
                     new_line = re.sub(r"\b(\w+)_All\b", lambda m: m.group(1) + "_" + str(val), new_line)
                     new_line = re.sub(r"\b" + var + r"\b", str(val), new_line)
                     out_lines.append(new_line)
-        else: out_lines.append(line); i += 1
-    return out_lines
+                    out_map.append(unrolled_map[b_idx])
+        else:
+            out_lines.append(line)
+            out_map.append(line_map[i])
+            i += 1
+    return out_lines, out_map
 
 def merge_continuations(lines):
     out = []
+    line_map = []
     i = 0
     while i < len(lines):
         current_line = lines[i]
+        start_line = i + 1
         while i < len(lines) - 1:
             clean = current_line.split('#')[0].strip()
             if not clean: break
@@ -259,12 +280,14 @@ def merge_continuations(lines):
             else:
                 break
         out.append(current_line)
+        line_map.append(start_line)
         i += 1
-    return out
+    return out, line_map
 
 def transpile_single_module(lines):
-    lines = merge_continuations(lines)
-    lines, warnings = unroll_loops(lines), []
+    lines, line_map = merge_continuations(lines)
+    lines, line_map = unroll_loops(lines, line_map)
+    warnings = []
     module_name, inputs, outputs, wires, arrays, logic_verilog, behavior_verilog, extra_functions = "", [], [], [], [], [], [], []
     signal_types, domains, logic_drivers, behavior_drivers, auto_inputs = {}, {}, set(), set(), []
     indent_levels = [-1 if not raw.split("#")[0].strip() else len(raw) - len(raw.lstrip()) for raw in lines]
@@ -319,7 +342,7 @@ def transpile_single_module(lines):
             current_scan_mode = None
         elif current_scan_mode == "behavior":
             if line.startswith("if"):
-                in_reset_if = "rst" in line.lower() or "reset" in line.lower()
+                in_reset_if = bool(re.search(r"\b(rst|reset|rst_n)\b", line.lower()))
                 if in_reset_if: has_reset_if = True
             elif line.startswith("else if") or line.startswith("else:"): in_reset_if = False
             if "=" in line and not line.startswith("if") and not line.startswith("else"):
@@ -348,7 +371,7 @@ def transpile_single_module(lines):
     current_mode, block_stack, instance_mod, instance_name, instance_ports = "global", [], "", "", []
     is_comb_block = False
     for i, raw_line in enumerate(lines):
-        line_num, line, indent = i + 1, raw_line.split('#')[0].strip(), indent_levels[i]
+        line_num, line, indent = line_map[i], raw_line.split('#')[0].strip(), indent_levels[i]
         if not line or line.startswith("#"): continue
 
         if line.startswith("module"):
@@ -405,7 +428,7 @@ def transpile_single_module(lines):
                         prefix = "reg" if port_name in behavior_drivers else "wire"
                         wires.append(prefix + " " + sig_prefix + "[" + str(width-1) + ":0] " + port_name + ";")
                 continue
-            line = re.sub(r"\s*valid\s*\(\d+\.\.\d+\)|\bsigned\b", "", line)
+            line = re.sub(r"\s*valid\s*\(\d+\.\.\d+\)|\bsigned\b", "", line).strip()
             match = re.match(r"^([\w\.]+)\s*\[(\d+) bits?\]$", line)
             if match:
                 name, bits = match.groups()
@@ -619,7 +642,7 @@ def generate_tb_from_source(source):
         line = line.split('#')[0].strip()
         if line == "input:": mode = "in"
         elif line == "output:": mode = "out"
-        elif line in ["wires:", "logic:", "arrays:", "behavior on", "interfaces:"] or line.startswith("end module"): mode = None
+        elif line.startswith("behavior on") or line in ["wires:", "logic:", "arrays:", "interfaces:"] or line.startswith("end module"): mode = None
         elif mode in ["in", "out"] and line:
             match = re.match(r"^([\w\.]+)(?:\s*\[(\d+)\s*bits?\])?", line)
             if match:
