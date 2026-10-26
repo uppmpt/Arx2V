@@ -801,7 +801,12 @@ def run_simulation(arx_file, tb_file=None):
     print(f"--- Compiling {arx_file} ---", file=sys.stderr)
     try:
         verilog_code, warnings = transpile_to_verilog(source)
-        for w in warnings: print(w, file=sys.stderr)
+        if warnings:
+            for w in warnings: print(w, file=sys.stderr)
+            print("\n--- WARNINGS DETECTED ---", file=sys.stderr)
+            if input("Warnings found. Proceed with simulation anyway? (Yes/No): ").strip().lower() not in ["yes", "y"]:
+                print("Simulation aborted by user.", file=sys.stderr)
+                return
     except Exception as e:
         print(f"Compilation error: {e}", file=sys.stderr)
         return
