@@ -786,7 +786,7 @@ COMMANDS
 TIP: All signals must be declared before use."""
 
 def start_repl():
-    print("Welcome to Arx2V compiler v1.1")
+    print("Welcome to Arx2V compiler v1.3")
     print("Commands: compile <file> | generate testbench for <file> | syntaxes | exit")
     print()
     while True:

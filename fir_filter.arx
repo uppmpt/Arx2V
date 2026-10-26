@@ -1,0 +1,35 @@
+module fir_filter
+
+input:
+  clk
+  rst
+  x_in [8 bits]
+  forInput w [4] [8 bits]
+
+output:
+  y_out [32 bits]
+
+wires:
+  forWire delay [4] [8 bits]
+  forWire mult [4] [32 bits]
+
+behavior on clk (posSen) or rst (highSen):
+  if (rst):
+    delay_0 = 0
+    delay_1 = 0
+    delay_2 = 0
+    delay_3 = 0
+  else:
+    delay_0 = x_in
+    delay_1 = delay_0
+    delay_2 = delay_1
+    delay_3 = delay_2
+end behavior
+
+logic:
+  for i in 0..3:
+    connect mult_All = delay_All * w_All
+
+  connect y_out = mult_0 + mult_1 + mult_2 + mult_3
+
+end module
