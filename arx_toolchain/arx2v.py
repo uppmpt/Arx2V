@@ -717,6 +717,19 @@ def generate_tb_from_source(source):
         elif line == "output:": mode = "out"
         elif line.startswith("behavior on") or line in ["wires:", "logic:", "arrays:", "interfaces:"] or line.startswith("end module"): mode = None
         elif mode in ["in", "out"] and line:
+            m_for = re.match(r"^(forInput|forOutput)\s+(\w+)\s*\[(\d+)\]\s*\[(\d+)\s*bits?\]", line)
+            if m_for:
+                kind, name, count, width = m_for.groups()
+                for k in range(int(count)):
+                    port_name = name + "_" + str(k)
+                    w_str = f"[{int(width)-1}:0] "
+                    if mode == "in" and kind == "forInput" and port_name not in seen_in:
+                        inputs_tb.append((port_name, w_str))
+                        seen_in.add(port_name)
+                    elif mode == "out" and kind == "forOutput" and port_name not in seen_out:
+                        outputs_tb.append((port_name, w_str))
+                        seen_out.add(port_name)
+                continue
             match = re.match(r"^([\w\.]+)(?:\s*\[(\d+)\s*bits?\])?", line)
             if match:
                 name, width = match.group(1).replace(".", "_"), match.group(2)
@@ -1067,9 +1080,11 @@ def start_repl():
                 continue
             if lower.startswith("compile "):
                 filename = cmd_clean.split(" ", 1)[1].strip()
-                if not os.path.exists(filename):
-                    print(f"Error: file '{filename}' not found.", file=sys.stderr)
+                found = find_arx_file(filename)
+                if not found:
+                    print(f"Error: file '{filename}' not found (looked in cwd, tests/, and toolchain/lib/).", file=sys.stderr)
                     continue
+                filename = found
                 with open(filename, "r") as f:
                     source = f.read()
                 print(f"\n--- COMPILING {filename} ---", file=sys.stderr)
