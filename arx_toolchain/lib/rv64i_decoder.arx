@@ -26,7 +26,6 @@ logic:
     connect funct7 = inst[bits 31-25]
 
 behavior on comb:
-    # Valores padrão para tudo
     alu_op = 0
     we = 0
     mem_read = 0

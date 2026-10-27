@@ -617,22 +617,56 @@ def transpile_single_module(lines):
     for b in behavior_verilog: verilog += f"{b}\n"
     return verilog + "endmodule\n", warnings
 
-def transpile_to_verilog(source_code):
+def resolve_imports(source_code, base_dir=".", seen=None, file_name="<unknown>"):
+    if seen is None:
+        seen = set()
+    lines = source_code.split("\n")
+    out_lines = []
+    for i, line in enumerate(lines):
+        stripped = line.split("#")[0].strip()
+        m = re.match(r'^importMod\s+"([^"]+)"', stripped)
+        if m:
+            import_path = m.group(1)
+            full_path = os.path.join(base_dir, import_path)
+            if not os.path.exists(full_path):
+                raise ValueError(
+                    f"Error in '{file_name}' (line {i+1}):\n"
+                    f"  importMod failed: File '{import_path}' not found.\n"
+                    f"  Looked in: {os.path.abspath(full_path)}\n"
+                    f"  Make sure the file exists and the path is correct relative to the source file."
+                )
+            if full_path in seen:
+                out_lines.append(f"// [importMod] '{import_path}' already imported (skipped)")
+                continue
+            seen.add(full_path)
+            with open(full_path, "r") as f:
+                imported_source = f.read()
+            resolved = resolve_imports(imported_source, base_dir=os.path.dirname(full_path) or ".", seen=seen, file_name=import_path)
+            out_lines.append(f"// ===== BEGIN importMod: {import_path} =====")
+            out_lines.append(resolved)
+            out_lines.append(f"// ===== END importMod: {import_path} =====\n")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines)
+
+def transpile_to_verilog(source_code, base_dir=".", file_name="<unknown>"):
+    source_code = resolve_imports(source_code, base_dir=base_dir, file_name=file_name)
     lines, modules, current_module = source_code.split('\n'), [], []
+
     for line in lines:
         if line.strip().startswith("module") and current_module: modules.append(current_module); current_module = []
         current_module.append(line)
     if current_module: modules.append(current_module)
     out_verilog, all_warnings = [], []
     for mod_lines in modules:
-        if any(l.strip() for l in mod_lines):
+        if any(l.strip() and not l.strip().startswith('//') and not l.strip().startswith('#') for l in mod_lines):
             v_code, w_list = transpile_single_module(mod_lines)
             out_verilog.append(v_code); all_warnings.extend(w_list)
     return "\n".join(out_verilog), all_warnings
 
-def handle_compilation(source):
+def handle_compilation(source, filename="<unknown>"):
     try:
-        verilog_code, warnings = transpile_to_verilog(source)
+        verilog_code, warnings = transpile_to_verilog(source, base_dir=os.path.dirname(filename) or ".", file_name=filename)
         if warnings:
             for w in warnings: print(w, file=sys.stderr)
             print("\n--- WARNINGS DETECTED ---", file=sys.stderr)
@@ -741,8 +775,10 @@ def handle_tb_generation(filename):
 
 def find_arx_file(filename):
     if os.path.exists(filename): return filename
+    toolchain_lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
     paths = [
         os.path.join("tests", filename),
+        os.path.join(toolchain_lib, filename),
         os.path.join(os.path.expanduser("~"), "arx_compiler", "tests", filename),
         os.path.join(os.path.expanduser("~"), "arx_compiler", filename),
     ]
@@ -862,7 +898,7 @@ def run_simulation(arx_file, tb_file=None):
         source = f.read()
     print(f"--- Compiling {arx_file} ---", file=sys.stderr)
     try:
-        verilog_code, warnings = transpile_to_verilog(source)
+        verilog_code, warnings = transpile_to_verilog(source, base_dir=os.path.dirname(arx_file) or ".", file_name=arx_file)
         if warnings:
             for w in warnings: print(w, file=sys.stderr)
             print("\n--- WARNINGS DETECTED ---", file=sys.stderr)
@@ -930,9 +966,92 @@ def run_simulation(arx_file, tb_file=None):
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
+
+def inspect_module(module_path):
+    import re
+    if not os.path.exists(module_path):
+        found = find_arx_file(module_path)
+        if not found:
+            print(f"Error: file '{module_path}' not found (looked in cwd and lib/).", file=sys.stderr)
+            return
+        module_path = found
+    
+    with open(module_path, "r") as f:
+        source = f.read()
+    
+    lines = source.split('\n')
+    current_section = None
+    module_name = None
+    inputs = []
+    outputs = []
+    
+    for line in lines:
+        clean = line.split('#')[0].strip()
+        if not clean: continue
+        
+        m = re.match(r'^module\s+(\w+)', clean)
+        if m:
+            module_name = m.group(1)
+            continue
+        
+        if clean == "input:":
+            current_section = "input"
+        elif clean == "output:":
+            current_section = "output"
+        elif clean in ["wires:", "arrays:", "logic:", "states:", "interfaces:"] or clean.startswith("behavior on"):
+            current_section = None
+        elif current_section == "input" and clean:
+            inputs.append(clean)
+        elif current_section == "output" and clean:
+            outputs.append(clean)
+    
+    if not module_name:
+        print(f"Error: no 'module <name>' declaration found in '{module_path}'.", file=sys.stderr)
+        return
+    
+    print(f"\n=== Module: {module_name} ===")
+    print(f"File: {module_path}\n")
+    print(f"INPUTS ({len(inputs)}):")
+    if inputs:
+        for inp in inputs:
+            print(f"  {inp}")
+    else:
+        print("  (none)")
+    print(f"\nOUTPUTS ({len(outputs)}):")
+    if outputs:
+        for out in outputs:
+            print(f"  {out}")
+    else:
+        print("  (none)")
+    print()
+
+def list_modules():
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    if not os.path.exists(lib_dir):
+        # Tenta na pasta do arquivo .arx atual
+        print(f"Error: 'lib/' folder not found in current directory ({os.getcwd()}).", file=sys.stderr)
+        return
+    files = sorted([f for f in os.listdir(lib_dir) if f.endswith(".arx")])
+    if not files:
+        print(f"'lib/' folder is empty.")
+        return
+    print(f"\n=== Available Modules in lib/ ({len(files)}) ===\n")
+    for fname in files:
+        path = os.path.join(lib_dir, fname)
+        with open(path, "r") as f:
+            first_line = ""
+            module_name = "?"
+            for line in f:
+                clean = line.split('#')[0].strip()
+                if clean.startswith("module"):
+                    module_name = clean.split()[1] if len(clean.split()) > 1 else "?"
+                    break
+        print(f"  {fname:<30}  (module: {module_name})")
+    print()
+
 def start_repl():
-    print("Welcome to Arx2V compiler v2.0")
-    print("Commands: compile <file> | sim <file> [tb.v] | generate testbench for <file> | syntaxes | exit")
+    print("Welcome to Arx2V compiler v3.0")
+    print("Commands: compile <file> | sim <file> [tb.v] | inspect <module> | modules | generate testbench for <file> | syntaxes | exit")
     print()
     while True:
         try:
@@ -954,13 +1073,20 @@ def start_repl():
                 with open(filename, "r") as f:
                     source = f.read()
                 print(f"\n--- COMPILING {filename} ---", file=sys.stderr)
-                handle_compilation(source)
+                handle_compilation(source, filename=filename)
                 continue
             if lower.startswith("sim "):
                 args = cmd_clean.split()
                 if len(args) == 2: run_simulation(args[1])
                 elif len(args) == 3: run_simulation(args[1], args[2])
                 else: print("Usage: sim <file.arx> [tb_file.v]")
+                continue
+            if lower.startswith("inspect "):
+                filename = cmd_clean[len("inspect "):].strip()
+                inspect_module(filename)
+                continue
+            if lower == "modules" or lower == "ls":
+                list_modules()
                 continue
             if lower.startswith("generate testbench for "):
                 filename = cmd_clean[len("generate testbench for "):].strip()
@@ -980,13 +1106,13 @@ def main():
         filename = sys.argv[2]
         if os.path.exists(filename):
             with open(filename, "r") as f: source = f.read()
-            print(f"--- COMPILING {filename} ---", file=sys.stderr); handle_compilation(source)
+            print(f"--- COMPILING {filename} ---", file=sys.stderr); handle_compilation(source, filename=filename)
         else: print(f"Error: File '{filename}' not found.", file=sys.stderr)
     elif len(sys.argv) > 1:
         filename = sys.argv[1]
         if os.path.exists(filename):
             with open(filename, "r") as f: source = f.read()
-            print(f"--- COMPILING {filename} ---", file=sys.stderr); handle_compilation(source)
+            print(f"--- COMPILING {filename} ---", file=sys.stderr); handle_compilation(source, filename=filename)
         else: print(f"Error: File '{filename}' not found.", file=sys.stderr)
     else: start_repl()
 
