@@ -26,6 +26,9 @@ class TypeChecker(ast.NodeVisitor):
         return self.target_type
     def visit_BinOp(self, node):
         left, right = self.visit(node.left), self.visit(node.right)
+        # Shifts (<< e >>) permitem misturar signed/unsigned no shift amount
+        if isinstance(node.op, (ast.RShift, ast.LShift)):
+            return ArxType(max(left.width, right.width), left.signed)
         if left.signed != right.signed: raise ValueError(f"Type mismatch: '{ast.unparse(node)}' mixes signed/unsigned.")
         return ArxType(max(left.width, right.width), left.signed)
     def visit_Compare(self, node):
@@ -293,6 +296,8 @@ def merge_continuations(lines):
     return out, line_map
 
 def transpile_single_module(lines):
+    # NOVO: remove comentários '#' antes de juntar linhas (evita que o mux receba '# comentario' como expressão)
+    lines = [l.split('#')[0].rstrip() for l in lines]
     lines, line_map = merge_continuations(lines)
     lines, line_map = unroll_loops(lines, line_map)
     warnings = []
