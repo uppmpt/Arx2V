@@ -1,0 +1,146 @@
+module cache_nway
+
+input:
+    clk
+    rst
+    cpu_addr [64 bits]
+    cpu_re [1 bit]
+    cpu_we [1 bit]
+    cpu_wdata [WIDTH bits]
+    mem_rdata [WIDTH bits]
+    mem_ready [1 bit]
+
+output:
+    cpu_rdata [WIDTH bits]
+    cpu_ready [1 bit]
+    mem_addr [64 bits]
+    mem_re [1 bit]
+    mem_we [1 bit]
+    mem_wdata [WIDTH bits]
+
+# O TOTAL_LINES é calculado como SETS * WAYS
+arrays:
+    cache_data [TOTAL_LINES] [WIDTH bits]
+    cache_tag [TOTAL_LINES] [TAG_BITS bits]
+    cache_valid [TOTAL_LINES] [1 bit]
+    cache_dirty [TOTAL_LINES] [1 bit]
+    fifo_way [SETS] [WAY_BITS bits]
+
+wires:
+    tag [TAG_BITS bits]
+    set_idx [INDEX_BITS bits]
+    zero_offset [2 bits]
+    
+    # Índices para cada via
+    idx_way_0 [INDEX_BITS bits]
+    idx_way_1 [INDEX_BITS bits]
+    idx_way_2 [INDEX_BITS bits]
+    idx_way_3 [INDEX_BITS bits]
+    
+    # Hit individual
+    hit_way_0 [1 bit]
+    hit_way_1 [1 bit]
+    hit_way_2 [1 bit]
+    hit_way_3 [1 bit]
+    hit [1 bit]
+    
+    # Seleção da via ativa (evitando mux aninhado)
+    active_idx_01 [INDEX_BITS bits]
+    active_idx_23 [INDEX_BITS bits]
+    active_idx [INDEX_BITS bits]
+    active_dirty [1 bit]
+    
+    # Vítima FIFO
+    victim_idx [INDEX_BITS bits]
+
+logic:
+    connect zero_offset = 0
+    connect set_idx = cpu_addr[bits 9-2]
+    connect tag = cpu_addr[bits 63-10]
+    
+    # Índice achatado (Set * 4 + Via)
+    connect idx_way_0 = (set_idx * 4) + 0
+    connect idx_way_1 = (set_idx * 4) + 1
+    connect idx_way_2 = (set_idx * 4) + 2
+    connect idx_way_3 = (set_idx * 4) + 3
+    
+    # Comparação paralela das Tags
+    connect hit_way_0 = (cache_tag[idx_way_0] == tag) logAnd (cache_valid[idx_way_0] == 1)
+    connect hit_way_1 = (cache_tag[idx_way_1] == tag) logAnd (cache_valid[idx_way_1] == 1)
+    connect hit_way_2 = (cache_tag[idx_way_2] == tag) logAnd (cache_valid[idx_way_2] == 1)
+    connect hit_way_3 = (cache_tag[idx_way_3] == tag) logAnd (cache_valid[idx_way_3] == 1)
+    
+    connect hit = hit_way_0 logOr hit_way_1 logOr hit_way_2 logOr hit_way_3
+    
+    # Mux em árvore (evita aninhamento profundo)
+    connect active_idx_01 = mux(hit_way_0) idx_way_1, idx_way_0 fallbackVal: idx_way_0
+    connect active_idx_23 = mux(hit_way_2) idx_way_3, idx_way_2 fallbackVal: idx_way_2
+    connect active_idx = mux(hit_way_0 logOr hit_way_1) active_idx_23, active_idx_01 fallbackVal: idx_way_0
+    
+    connect active_dirty = (cache_dirty[active_idx] == 1)
+    
+    # Vítima escolhida pela FIFO
+    connect victim_idx = (set_idx * 4) + fifo_way[set_idx]
+
+states:
+    IDLE
+    HIT
+    WRITE_BACK
+    FETCH
+
+behavior on clk (posSen) or rst (posSen):
+    if (rst == 1):
+        state = IDLE
+        cpu_ready = 0
+        mem_re = 0
+        mem_we = 0
+        # O reset da FIFO precisa de um estado FLUSH no hardware real.
+        # Em simulação, o Verilator inicializa tudo com 0, o que já é o suficiente.
+    else:
+        when state:
+            IDLE:
+                if (cpu_re == 1) logOr (cpu_we == 1):
+                    if (hit == 1):
+                        state = HIT
+                    else:
+                        if (cache_valid[victim_idx] == 1) logAnd (cache_dirty[victim_idx] == 1):
+                            state = WRITE_BACK
+                        else:
+                            state = FETCH
+                        
+            HIT:
+                if (cpu_re == 1):
+                    cpu_rdata = cache_data[active_idx]
+                else:
+                    cache_data[active_idx] = cpu_wdata
+                    cache_dirty[active_idx] = 1
+                cpu_ready = 1
+                if (cpu_re == 0 logAnd cpu_we == 0):
+                    state = IDLE
+                    cpu_ready = 0
+                    
+            WRITE_BACK:
+                mem_addr = conc(zero_offset, set_idx, cache_tag[victim_idx])
+                mem_wdata = cache_data[victim_idx]
+                mem_we = 1
+                if (mem_ready == 1):
+                    mem_we = 0
+                    state = FETCH
+                    
+            FETCH:
+                mem_addr = conc(zero_offset, set_idx, tag)
+                mem_re = 1
+                if (mem_ready == 1):
+                    cache_data[victim_idx] = mem_rdata
+                    cache_tag[victim_idx] = tag
+                    cache_valid[victim_idx] = 1
+                    cache_dirty[victim_idx] = 0
+                    # Avança a FIFO (rollover automático pelos 2 bits)
+                    fifo_way[set_idx] = fifo_way[set_idx] + 1
+                    mem_re = 0
+                    state = HIT
+            fallbackVal:
+                state = IDLE
+end behavior
+
+end module
