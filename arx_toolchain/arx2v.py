@@ -629,12 +629,18 @@ def resolve_imports(source_code, base_dir=".", seen=None, file_name="<unknown>")
             import_path = m.group(1)
             full_path = os.path.join(base_dir, import_path)
             if not os.path.exists(full_path):
-                raise ValueError(
-                    f"Error in '{file_name}' (line {i+1}):\n"
-                    f"  importMod failed: File '{import_path}' not found.\n"
-                    f"  Looked in: {os.path.abspath(full_path)}\n"
-                    f"  Make sure the file exists and the path is correct relative to the source file."
-                )
+                # Se não achou na pasta do arquivo, tenta na biblioteca padrão do toolchain
+                std_lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), import_path)
+                if os.path.exists(std_lib_path):
+                    full_path = std_lib_path
+                else:
+                    raise ValueError(
+                        f"Error in '{file_name}' (line {i+1}):\n"
+                        f"  importMod failed: File '{import_path}' not found.\n"
+                        f"  Looked in: {os.path.abspath(full_path)}\n"
+                        f"  Also looked in standard library: {os.path.abspath(std_lib_path)}\n"
+                        f"  Make sure the file exists and the path is correct."
+                    )
             if full_path in seen:
                 out_lines.append(f"// [importMod] '{import_path}' already imported (skipped)")
                 continue
@@ -651,6 +657,32 @@ def resolve_imports(source_code, base_dir=".", seen=None, file_name="<unknown>")
 
 def transpile_to_verilog(source_code, base_dir=".", file_name="<unknown>"):
     source_code = resolve_imports(source_code, base_dir=base_dir, file_name=file_name)
+    
+    # NOVO: Extrai e aplica parâmetros globalmente antes de separar os módulos
+    params = {}
+    lines = source_code.split('\n')
+    new_lines = []
+    in_params = False
+    for line in lines:
+        clean = line.split('#')[0].strip()
+        if clean == "parameters:":
+            in_params = True
+            continue
+        if in_params:
+            if clean in ["input:", "output:", "wires:", "arrays:", "logic:", "states:", "end module"] or clean.startswith("module") or clean.startswith("behavior on"):
+                in_params = False
+            else:
+                if '=' in clean:
+                    k, v = clean.split('=')
+                    params[k.strip()] = v.strip()
+                continue
+        new_lines.append(line)
+    
+    # Substitui no arquivo inteiro expandido
+    source_code = "\n".join(new_lines)
+    for k, v in params.items():
+        source_code = re.sub(r'\b' + k + r'\b', v, source_code)
+        
     lines, modules, current_module = source_code.split('\n'), [], []
 
     for line in lines:
@@ -1063,7 +1095,7 @@ def list_modules():
     print()
 
 def start_repl():
-    print("Welcome to Arx2V compiler v3.0")
+    print("Welcome to Arx2V compiler v3.1")
     print("Commands: compile <file> | sim <file> [tb.v] | inspect <module> | modules | generate testbench for <file> | syntaxes | exit")
     print()
     while True:
