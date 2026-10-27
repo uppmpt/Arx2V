@@ -306,7 +306,8 @@ def transpile_single_module(lines):
     behavior_blocks_assignments = []
 
     for i, raw_line in enumerate(lines):
-        line = raw_line.split("#")[0].strip()
+        line = raw_line.split("#")[0].split("//")[0].strip()
+        if line.startswith("//"): line = ""
         if not line: continue
         
         if line == "states:":
@@ -433,7 +434,7 @@ def transpile_single_module(lines):
             current_mode = "logic"
         elif line == "end module": current_mode = "done"
         elif line.startswith("instance"):
-            match_inst = re.match(r"^instance (\w+) as ([\w\[\]]+):$", line)
+            match_inst = re.match(r"^instance\s+(\w+)(?:\s*\([^)]+\))?\s+as\s+([\w\[\]]+):$", line)
             if not match_inst: raise ValueError(f"Error: invalid instance syntax in line {line_num}")
             instance_mod, raw_name = match_inst.groups()
             instance_name = raw_name.replace("[", "_").replace("]", "")
@@ -623,7 +624,7 @@ def resolve_imports(source_code, base_dir=".", seen=None, file_name="<unknown>")
     lines = source_code.split("\n")
     out_lines = []
     for i, line in enumerate(lines):
-        stripped = line.split("#")[0].strip()
+        stripped = line.split("#")[0].split("//")[0].strip()
         m = re.match(r'^importMod\s+"([^"]+)"', stripped)
         if m:
             import_path = m.group(1)
@@ -689,6 +690,59 @@ def transpile_to_verilog(source_code, base_dir=".", file_name="<unknown>"):
         if line.strip().startswith("module") and current_module: modules.append(current_module); current_module = []
         current_module.append(line)
     if current_module: modules.append(current_module)
+
+    # --- INÍCIO DO PASSE DE PARAMETRIZAÇÃO POR INSTÂNCIA ---
+    module_dict = {}
+    for mod_lines in modules:
+        for line in mod_lines:
+            m = re.match(r"^module\s+(\w+)", line.strip())
+            if m:
+                module_dict[m.group(1)] = list(mod_lines)
+                break
+
+    new_modules_to_add = {}
+    modules_to_remove = set()
+    for mod_lines in modules:
+        for i, line in enumerate(mod_lines):
+            # Regex: instance NomeModulo(P1=V1, P2=V2) as NomeInstancia:
+            m_inst = re.match(r"^(\s*)instance\s+(\w+)\s*\(([^)]+)\)\s*as\s+([\w\[\]]+):\s*(#.*)?$", line)
+            if m_inst:
+                indent, target_mod, params_str, inst_name, comment = m_inst.groups()
+                inst_name_clean = inst_name.replace("[", "_").replace("]", "")
+
+                if target_mod in module_dict:
+                    new_mod_name = f"{target_mod}_{inst_name_clean}"
+                    
+                    inst_params = {}
+                    for p in params_str.split(','):
+                        if '=' in p:
+                            k, v = p.split('=')
+                            inst_params[k.strip()] = v.strip()
+
+                    if new_mod_name not in new_modules_to_add:
+                        new_mod_lines = []
+                        for t_line in module_dict[target_mod]:
+                            # Muda o nome do módulo (ex: module cache_l1 -> module cache_l1_icache)
+                            if re.match(r"^\s*module\s+" + target_mod + r"\b", t_line):
+                                new_mod_lines.append(re.sub(r"^(\s*)module\s+" + target_mod, r"\1module " + new_mod_name, t_line))
+                            else:
+                                # Substitui os parâmetros no corpo do módulo duplicado
+                                t_line_new = t_line
+                                for k, v in inst_params.items():
+                                    t_line_new = re.sub(r'\b' + k + r'\b', v, t_line_new)
+                                new_mod_lines.append(t_line_new)
+                        new_modules_to_add[new_mod_name] = new_mod_lines
+                        modules_to_remove.add(target_mod)
+
+                    # Atualiza a linha da instância para apontar para o módulo customizado
+                    mod_lines[i] = f"{indent}instance {new_mod_name} as {inst_name}:{comment if comment else ''}"
+
+    # Remove o módulo base original para não dar erro de parâmetro não resolvido
+    modules = [m for m in modules if not (len(m) > 0 and re.match(r"^module\s+(\w+)", m[0].strip()) and re.match(r"^module\s+(\w+)", m[0].strip()).group(1) in modules_to_remove)]
+    
+    modules.extend(new_modules_to_add.values())
+    # --- FIM DO PASSE DE PARAMETRIZAÇÃO POR INSTÂNCIA ---
+
     out_verilog, all_warnings = [], []
     for mod_lines in modules:
         if any(l.strip() and not l.strip().startswith('//') and not l.strip().startswith('#') for l in mod_lines):
@@ -707,7 +761,7 @@ def handle_compilation(source, filename="<unknown>"):
         print(verilog_code)
     except Exception as e: print(f"Compilation error: {e}", file=sys.stderr)
 def validate_line(line, context):
-    clean = line.split("#")[0].strip()
+    clean = line.split("#")[0].split("//")[0].strip()
     if not clean: return True, context
     if clean in ["input:", "output:", "wires:", "arrays:", "logic:"]: return True, clean.replace(":", "")
     if clean == "end module": return True, "done"
