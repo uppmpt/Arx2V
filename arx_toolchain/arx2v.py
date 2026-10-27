@@ -1069,7 +1069,9 @@ def run_simulation(arx_file, tb_file=None):
 def inspect_module(module_path):
     import re
     if not os.path.exists(module_path):
-        found = find_arx_file(module_path)
+        # Se o usuário não digitou a extensão, tenta adicionar .arx
+        search_name = module_path if module_path.endswith(".arx") else module_path + ".arx"
+        found = find_arx_file(search_name)
         if not found:
             print(f"Error: file '{module_path}' not found (looked in cwd and lib/).", file=sys.stderr)
             return
