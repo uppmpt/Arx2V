@@ -290,6 +290,8 @@ def transpile_single_module(lines):
     warnings = []
     module_name, inputs, outputs, wires, arrays, logic_verilog, behavior_verilog, extra_functions = "", [], [], [], [], [], [], []
     signal_types, domains, logic_drivers, behavior_drivers, auto_inputs = {}, {}, set(), set(), []
+    state_list = []
+    states_width = 0
     indent_levels = [-1 if not raw.split("#")[0].strip() else len(raw) - len(raw.lstrip()) for raw in lines]
     current_scan_mode, has_reset_in_behavior, has_assignment_in_behavior, reset_branch_has_assignment, in_reset_if, has_reset_if = None, False, False, False, False, False
     current_block_assignments = set()
@@ -298,6 +300,17 @@ def transpile_single_module(lines):
     for i, raw_line in enumerate(lines):
         line = raw_line.split("#")[0].strip()
         if not line: continue
+        
+        if line == "states:":
+            current_scan_mode = "states"
+            continue
+        elif current_scan_mode == "states":
+            if line in ["input:", "output:", "wires:", "arrays:", "logic:", "end module"] or line.startswith("behavior on"):
+                current_scan_mode = None
+            else:
+                state_list.append(line)
+                continue
+
         m_for = re.match(r"^(forInput|forOutput|forWire)\s+(\w+)\s*\[(\d+)\]\s*\[(\d+)\s*bits?\](\s+signed)?(\s*valid\s*\((\d+)\.\.(\d+)\))?$", line)
         if m_for:
             kind, name, count, width, signed, valid, vmin, vmax = m_for.groups()
@@ -360,6 +373,15 @@ def transpile_single_module(lines):
                     raise ValueError(f"Hardware collision: Multiple 'connect' drivers for '{lhs}'.")
                 logic_drivers.add(lhs)
 
+    # Calcula largura dos estados
+    if state_list:
+        states_width = max(1, (len(state_list) - 1).bit_length())
+        for s in state_list:
+            signal_types[s] = ArxType(states_width, False)
+        if "state" not in signal_types:
+            signal_types["state"] = ArxType(states_width, False)
+            wires.append(f"reg [{states_width-1}:0] state;")
+
     # Check for signals assigned in multiple DISTINCT behavior blocks
     seen_signals = set()
     for block in behavior_blocks_assignments:
@@ -377,7 +399,7 @@ def transpile_single_module(lines):
         if line.startswith("module"):
             if len(line.split()) > 1: module_name, current_mode = line.split()[1], "module_declared"
             else: raise ValueError(f"Syntax error on line {line_num}")
-        elif line in ["input:", "output:", "wires:", "arrays:", "logic:"]: current_mode = line.replace(":", "")
+        elif line in ["input:", "output:", "wires:", "arrays:", "logic:", "states:"]: current_mode = line.replace(":", "")
         elif line.startswith("behavior on"):
             current_mode = "behavior"
             sens_str = re.sub(r"(\w+)\s*\(posSen\)", r"posedge \1", re.search(r"^behavior on (.*):$", line).group(1))
@@ -411,6 +433,8 @@ def transpile_single_module(lines):
         elif line == "end instance":
             logic_verilog.append(f"  {instance_mod} {instance_name} (\n    {',\n    '.join(instance_ports)}\n  );")
             current_mode = "logic"
+        elif current_mode == "states":
+            continue
         elif current_mode in ["input", "output", "wires"]:
             m_for = re.match(r"^(forInput|forOutput|forWire)\s+(\w+)\s*\[(\d+)\]\s*\[(\d+)\s*bits?\](\s+signed)?$", line)
             if m_for:
@@ -570,6 +594,12 @@ def transpile_single_module(lines):
     for sig in auto_inputs:
         if not any(sig in inp.split() for inp in inputs): inputs.append(f"input {sig}")
     verilog = f"module {module_name} (\n" + ",\n".join(["  " + i for i in inputs + outputs]) + "\n);\n\n"
+    
+    if state_list:
+        for idx, s in enumerate(state_list):
+            verilog += f"  localparam {s} = {states_width}'d{idx};\n"
+        verilog += "\n"
+        
     for arr in arrays: verilog += f"  {arr}\n"
     for w in wires: verilog += f"  {w}\n"
     for f in extra_functions: verilog += f"{f}\n\n"
