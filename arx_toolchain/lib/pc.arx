@@ -1,0 +1,30 @@
+module pc
+
+input:
+    clk
+    rst
+    jmp_enable [1 bit]
+    jmp_addr [WIDTH bits]
+
+output:
+    pc_out [WIDTH bits]
+
+wires:
+    pc_plus_4 [WIDTH bits]
+    next_pc [WIDTH bits]
+
+logic:
+    # Somador: O auto-extension do compilador vai transformar o "4" em WIDTH bits
+    connect pc_plus_4 = pc_out + 4
+    
+    # Mux de Jump: Se jmp_enable=0, vai para pc+4. Se for 1, vai para jmp_addr.
+    connect next_pc = mux(jmp_enable) pc_plus_4, jmp_addr fallbackVal: pc_plus_4
+
+behavior on clk (posSen) or rst (posSen):
+    if (rst == 1):
+        pc_out = 0
+    else:
+        pc_out = next_pc
+end behavior
+
+end module
