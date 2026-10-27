@@ -1,0 +1,33 @@
+module regfile
+
+input:
+    clk
+    we [1 bit]
+    rs1_addr [5 bits]
+    rs2_addr [5 bits]
+    rd_addr [5 bits]
+    rd_data [WIDTH bits]
+
+output:
+    rs1_data [WIDTH bits]
+    rs2_data [WIDTH bits]
+
+arrays:
+    regs [32] [WIDTH bits]
+
+logic:
+    # Se o endereço for 0, retorna 0 (x0 hardcoded). Senão, lê do array.
+    connect rs1_data = mux(rs1_addr == 0) regs[rs1_addr], 0 fallbackVal: 0
+    connect rs2_data = mux(rs2_addr == 0) regs[rs2_addr], 0 fallbackVal: 0
+
+behavior on clk (posSen):
+    if (we == 1):
+        if (rd_addr ≠ 0):
+            regs[rd_addr] = rd_data
+        else:
+            lock
+    else:
+        lock
+end behavior
+
+end module
