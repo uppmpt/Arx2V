@@ -1,4 +1,4 @@
-module cache_nway
+module cache_nway_singlecore
 
 input:
     clk
