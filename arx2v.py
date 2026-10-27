@@ -181,7 +181,15 @@ def translate_expr(expr, target_type, signal_types, line_num=None):
             else:
                 expr_str = f"{{{diff}'d0, {expr_str}}}"
         return expr_str, inferred
-    except SyntaxError: raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Invalid expression syntax: '{expr}'")
+    except SyntaxError:
+        hint = ""
+        if re.search(r'^(if|when|else if)\s*\(', expr):
+            hint = " (Hint: try adding a space after the keyword, e.g. 'if (cond):')"
+        elif "==" in expr and not expr.split("==")[-1].strip():
+            hint = " (Hint: missing right-hand side after '==')"
+        elif "=" in expr and "==" not in expr and "!=" not in expr:
+            hint = " (Hint: use '==' for comparison, '=' is only for assignment)"
+        raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Invalid expression syntax: '{expr}'{hint}")
     except Exception as e: raise ValueError(f"{'Line ' + str(line_num) + ': ' if line_num else ''}Expression error: {e}")
 
 def translate_mux(expr, target_t, signal_types, line_num=None):
@@ -493,7 +501,7 @@ def transpile_single_module(lines):
                 for w in mux_warnings: warnings.append(f"Warning: Line {line_num}: {w}")
                 logic_verilog.append(f"  assign {translate_lhs(out_wire)} = {ternary};")
             else:
-                match_connect = re.search(r"connect ([\w\[\]\s+\-]+) = (.*)", line)
+                match_connect = re.search(r"connect\s+([\w\[\]\s+\-]+?)\s*=\s*(.*)", line)
                 if match_connect:
                     out_wire, expr = match_connect.groups()
                     base_wire = out_wire.split("[")[0]
@@ -526,7 +534,7 @@ def transpile_single_module(lines):
                 block_stack.pop()
 
             if line.startswith("when "):
-                v_cond, v_type = translate_expr(line.replace('when ', '').rstrip(':'), ArxType(1, False), signal_types, line_num)
+                v_cond, v_type = translate_expr(re.sub(r'^when\s*', '', line).rstrip(':'), ArxType(1, False), signal_types, line_num)
                 behavior_verilog.append(f"{'    ' + '  ' * len(block_stack)}case ({v_cond[1:-1] if v_cond.startswith('(') and v_cond.endswith(')') else v_cond})")
                 block_stack.append({"type": "when", "indent": indent, "width": v_type.width, "has_fallback": False})
             elif is_branch and block_stack and block_stack[-1]["type"] == "when":
@@ -557,13 +565,14 @@ def transpile_single_module(lines):
                     behavior_verilog.append(f"{base_indent}{'default' if branch_val == 'fallbackVal' else branch_val}: begin")
                     block_stack.append({"type": "when_branch", "indent": indent})
             elif line.startswith("if"):
-                v_cond, _ = translate_expr(line.replace('if ', '').rstrip(':'), ArxType(1, False), signal_types, line_num)
+                cond_str = re.sub(r'^if\s*', '', line).rstrip(':')
+                v_cond, _ = translate_expr(cond_str, ArxType(1, False), signal_types, line_num)
                 behavior_verilog.append(f"{'    ' + '  ' * len(block_stack)}if ({v_cond[1:-1] if v_cond.startswith('(') and v_cond.endswith(')') else v_cond}) begin")
                 block_stack.append({"type": "if", "indent": indent})
             elif line.startswith("else if"):
                 if not block_stack or block_stack[-1]["indent"] != indent: raise ValueError(f"Error: 'else if' without matching 'if' in line {line_num}")
                 depth = len(block_stack) - 1
-                v_cond, _ = translate_expr(line.replace('else if ', '').rstrip(':'), ArxType(1, False), signal_types, line_num)
+                v_cond, _ = translate_expr(re.sub(r'^else\s+if\s*', '', line).rstrip(':'), ArxType(1, False), signal_types, line_num)
                 behavior_verilog.append(f"{'    ' + '  ' * depth}end else if ({v_cond[1:-1] if v_cond.startswith('(') and v_cond.endswith(')') else v_cond}) begin")
                 block_stack[-1] = {"type": "else_if", "indent": indent}
             elif line.startswith("else:"):
