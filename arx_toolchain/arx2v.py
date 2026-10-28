@@ -131,6 +131,9 @@ def translate_expr(expr, target_type, signal_types, line_num=None):
             if isinstance(node, ast.BinOp):
                 left, right = unparse_verilog(node.left, parent_type), unparse_verilog(node.right, parent_type)
                 op_map = {'Add':'+', 'Sub':'-', 'Mult':'*', 'Div':'/', 'BitAnd':'&', 'BitOr':'|', 'BitXor':'^', 'LShift':'<<', 'RShift':'>>'}
+                if isinstance(node.op, ast.RShift):
+                    if isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Name) and node.left.func.id == "signed":
+                        return f"({left} >>> {right})"
                 return f"({left} {op_map.get(type(node.op).__name__, type(node.op).__name__)} {right})"
             if isinstance(node, ast.Compare):
                 left_type, right_type = checker.visit(node.left), checker.visit(node.comparators[0])
@@ -1210,6 +1213,14 @@ def start_repl():
 def main():
     if len(sys.argv) > 1 and sys.argv[1].lower() == "login":
         start_repl()
+    elif len(sys.argv) > 1 and sys.argv[1].lower() == "sim":
+        if len(sys.argv) < 3:
+            print("Usage: arx2v.py sim <file.arx> [tb_file.v]", file=sys.stderr)
+            sys.exit(1)
+        arx_file = sys.argv[2]
+        tb_file = sys.argv[3] if len(sys.argv) > 3 else None
+        run_simulation(arx_file, tb_file)
+        return
     elif len(sys.argv) > 1 and sys.argv[1].lower() == "compile":
         filename = sys.argv[2]
         if os.path.exists(filename):

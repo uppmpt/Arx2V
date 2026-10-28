@@ -3,7 +3,7 @@ module alu
 input:
     a [WIDTH bits]
     b [WIDTH bits]
-    alu_op [4 bits]
+    alu_op [5 bits]
 
 output:
     result [WIDTH bits]
@@ -18,41 +18,58 @@ wires:
     sra_res [WIDTH bits]
     slt_res [WIDTH bits]
     sltu_res [WIDTH bits]
-    
+
     shift_amt [6 bits]
+    shift_amt_w [5 bits]
+
+    a_lo [32 bits]
+    b_lo [32 bits]
+    addw_res [32 bits]
+    subw_res [32 bits]
+    sllw_res [32 bits]
+    srlw_res [32 bits]
+    sraw_res [32 bits]
 
 logic:
     connect shift_amt = b[bits 5-0]
+    connect shift_amt_w = b[bits 4-0]
+    connect a_lo = a[bits 31-0]
+    connect b_lo = b[bits 31-0]
 
-    # Cálculos paralelos
     connect sub_res = a - b
     connect and_res = a bitwAnd b
     connect or_res = a bitwOr b
     connect xor_res = a bitwXor b
     connect sll_res = a <shf shift_amt
     connect srl_res = a shf> shift_amt
-    
-    # SRA: Shift aritmético usa o cast signed()
     connect sra_res = signed(a) shf> shift_amt
-    
-    # SLT e SLTU: Comparações geram 1 bit, o compilador auto-estende para WIDTH
     connect slt_res = signed(a) < signed(b)
     connect sltu_res = a < b
 
-    # Multiplexador da ALU (evita aninhamento proibido)
+    connect addw_res = signed(a_lo) + signed(b_lo)
+    connect subw_res = signed(a_lo) - signed(b_lo)
+    connect sllw_res = a_lo <shf shift_amt_w
+    connect srlw_res = a_lo shf> shift_amt_w
+    connect sraw_res = signed(a_lo) shf> shift_amt_w
+
     connect result = mux(alu_op)
-        (a + b),      # 0: ADD
-        sub_res,      # 1: SUB
-        and_res,      # 2: AND
-        or_res,       # 3: OR
-        xor_res,      # 4: XOR
-        sll_res,      # 5: SLL
-        srl_res,      # 6: SRL
-        sra_res,      # 7: SRA
-        slt_res,      # 8: SLT
-        sltu_res,     # 9: SLTU
-        b,            # 10: PASS_B (para LUI e AUIPC)
-        0             # 11: Reservado
+        (a + b),
+        sub_res,
+        and_res,
+        or_res,
+        xor_res,
+        sll_res,
+        srl_res,
+        sra_res,
+        slt_res,
+        sltu_res,
+        b,
+        signed(addw_res),
+        signed(subw_res),
+        0,
+        signed(sllw_res),
+        signed(srlw_res),
+        signed(sraw_res)
         fallbackVal: 0
 
 end module
