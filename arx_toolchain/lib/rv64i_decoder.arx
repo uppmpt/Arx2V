@@ -7,15 +7,49 @@ output:
     rd [5 bits]
     rs1 [5 bits]
     rs2 [5 bits]
-    alu_op [4 bits]
+    alu_op [5 bits]
+    imm [64 bits]
     we [1 bit]
+    a_uses_pc [1 bit]
+    b_uses_imm [1 bit]
     mem_read [1 bit]
     mem_write [1 bit]
+    mem_size [2 bits]
+    mem_signed [1 bit]
+    is_branch [1 bit]
+    branch_op [3 bits]
+    is_jal [1 bit]
+    is_jalr [1 bit]
+    is_lui [1 bit]
+    is_auipc [1 bit]
+    is_fence [1 bit]
+    is_ecall [1 bit]
+    is_csr [1 bit]
+    is_csr_imm [1 bit]
+    csr_addr [12 bits]
+    csr_op [2 bits]
+    illegal [1 bit]
 
 wires:
     opcode [7 bits]
     funct3 [3 bits]
     funct7 [7 bits]
+    
+    imm_i_12 [12 bits] signed
+    imm_s_12 [12 bits] signed
+    imm_b_12 [12 bits] signed
+    imm_u_20 [20 bits] signed
+    imm_j_20 [20 bits] signed
+    
+    imm_i_ext [64 bits]
+    imm_s_ext [64 bits]
+    imm_b_ext [64 bits]
+    imm_u_ext [64 bits]
+    imm_j_ext [64 bits]
+    
+    imm_b_shift [64 bits]
+    imm_u_shift [64 bits]
+    imm_j_shift [64 bits]
 
 logic:
     connect opcode = inst[bits 6-0]
@@ -24,62 +58,248 @@ logic:
     connect rs1 = inst[bits 19-15]
     connect rs2 = inst[bits 24-20]
     connect funct7 = inst[bits 31-25]
+    
+    # Immediate decoding (slices + conc)
+    connect imm_i_12 = inst[bits 31-20]
+    connect imm_s_12 = conc(inst[bits 11-7], inst[bits 31-25])
+    connect imm_b_12 = conc(inst[bits 11-8], inst[bits 30-25], inst[7], inst[31])
+    connect imm_u_20 = inst[bits 31-12]
+    connect imm_j_20 = conc(inst[bits 30-21], inst[20], inst[bits 19-12], inst[31])
+    
+    # Sign-extend to 64 bits (via signed wire assign)
+    connect imm_i_ext = imm_i_12
+    connect imm_s_ext = imm_s_12
+    connect imm_b_ext = imm_b_12
+    connect imm_u_ext = imm_u_20
+    connect imm_j_ext = imm_j_20
+    
+    # Apply alignment shifts
+    connect imm_b_shift = imm_b_ext <shf 1
+    connect imm_u_shift = imm_u_ext <shf 12
+    connect imm_j_shift = imm_j_ext <shf 1
 
 behavior on comb:
-    alu_op = 0
+    # Defaults
     we = 0
+    a_uses_pc = 0
+    b_uses_imm = 0
     mem_read = 0
     mem_write = 0
-
+    mem_size = 0
+    mem_signed = 0
+    is_branch = 0
+    branch_op = 0
+    is_jal = 0
+    is_jalr = 0
+    is_lui = 0
+    is_auipc = 0
+    is_fence = 0
+    is_ecall = 0
+    is_csr = 0
+    is_csr_imm = 0
+    csr_addr = 0
+    csr_op = 0
+    illegal = 0
+    imm = 0
+    alu_op = 0
+    
     when opcode:
-        51: # R-Type
+        55: # LUI
             we = 1
-            when funct3:
-                0:
-                    if (funct7 == 32):
-                        alu_op = 1 # SUB
-                    else:
-                        alu_op = 0 # ADD
-                7: alu_op = 2 # AND
-                6: alu_op = 3 # OR
-                4: alu_op = 4 # XOR
-                2: alu_op = 5 # SLT
-                fallbackVal:
-                    alu_op = 0
-        19: # I-Type
+            is_lui = 1
+            b_uses_imm = 1
+            alu_op = 10
+            imm = imm_u_shift
+        
+        23: # AUIPC
             we = 1
+            is_auipc = 1
+            a_uses_pc = 1
+            b_uses_imm = 1
+            alu_op = 0
+            imm = imm_u_shift
+        
+        111: # JAL
+            we = 1
+            is_jal = 1
+            a_uses_pc = 1
+            b_uses_imm = 1
+            alu_op = 0
+            imm = imm_j_shift
+        
+        103: # JALR
+            we = 1
+            is_jalr = 1
+            b_uses_imm = 1
+            alu_op = 0
+            imm = imm_i_ext
+            if (funct3 ≠ 0):
+                illegal = 1
+        
+        99: # BRANCH
+            is_branch = 1
+            alu_op = 1
+            imm = imm_b_shift
             when funct3:
-                0: alu_op = 0 # ADDI
-                7: alu_op = 2 # ANDI
-                6: alu_op = 3 # ORI
-                4: alu_op = 4 # XORI
-                fallbackVal:
-                    alu_op = 0
+                0: branch_op = 0
+                1: branch_op = 1
+                4: branch_op = 2
+                5: branch_op = 3
+                6: branch_op = 4
+                7: branch_op = 5
+                fallbackVal: illegal = 1
+        
         3: # LOAD
             we = 1
             mem_read = 1
+            b_uses_imm = 1
             alu_op = 0
+            imm = imm_i_ext
+            when funct3:
+                0:
+                    mem_size = 0
+                    mem_signed = 1
+                1:
+                    mem_size = 1
+                    mem_signed = 1
+                2:
+                    mem_size = 2
+                    mem_signed = 1
+                3:
+                    mem_size = 3
+                    mem_signed = 0
+                4:
+                    mem_size = 0
+                    mem_signed = 0
+                5:
+                    mem_size = 1
+                    mem_signed = 0
+                6:
+                    mem_size = 2
+                    mem_signed = 0
+                fallbackVal: illegal = 1
+        
         35: # STORE
             mem_write = 1
+            b_uses_imm = 1
             alu_op = 0
-        55: # LUI
+            imm = imm_s_ext
+            when funct3:
+                0: mem_size = 0
+                1: mem_size = 1
+                2: mem_size = 2
+                3: mem_size = 3
+                fallbackVal: illegal = 1
+        
+        19: # OP-IMM
             we = 1
-            alu_op = 0
-        23: # AUIPC
+            b_uses_imm = 1
+            imm = imm_i_ext
+            when funct3:
+                0: alu_op = 0
+                2: alu_op = 8
+                3: alu_op = 9
+                4: alu_op = 4
+                6: alu_op = 3
+                7: alu_op = 2
+                1: alu_op = 5
+                5:
+                    if (funct7[5] == 1):
+                        alu_op = 7
+                    else:
+                        alu_op = 6
+                fallbackVal: illegal = 1
+        
+        51: # OP
             we = 1
-            alu_op = 0
-        111: # JAL
+            when funct3:
+                0:
+                    if (funct7[5] == 1):
+                        alu_op = 1
+                    else:
+                        alu_op = 0
+                1: alu_op = 5
+                2: alu_op = 8
+                3: alu_op = 9
+                4: alu_op = 4
+                5:
+                    if (funct7[5] == 1):
+                        alu_op = 7
+                    else:
+                        alu_op = 6
+                6: alu_op = 3
+                7: alu_op = 2
+                fallbackVal: illegal = 1
+        
+        27: # OP-IMM-32 (RV64 word ops)
             we = 1
-            alu_op = 0
-        103: # JALR
+            b_uses_imm = 1
+            imm = imm_i_ext
+            when funct3:
+                0: alu_op = 11
+                1: alu_op = 14
+                5:
+                    if (funct7[5] == 1):
+                        alu_op = 16
+                    else:
+                        alu_op = 15
+                fallbackVal: illegal = 1
+        
+        59: # OP-32 (RV64 word ops R-type)
             we = 1
-            alu_op = 0
-        99: # BRANCH
-            alu_op = 1
+            when funct3:
+                0:
+                    if (funct7[5] == 1):
+                        alu_op = 12
+                    else:
+                        alu_op = 11
+                1: alu_op = 14
+                5:
+                    if (funct7[5] == 1):
+                        alu_op = 16
+                    else:
+                        alu_op = 15
+                fallbackVal: illegal = 1
+        
+        15: # MISC-MEM (FENCE)
+            is_fence = 1
+        
+        115: # SYSTEM
+            csr_addr = inst[bits 31-20]
+            when funct3:
+                0:
+                    is_ecall = 1
+                1:
+                    we = 1
+                    is_csr = 1
+                    csr_op = 0
+                2:
+                    we = 1
+                    is_csr = 1
+                    csr_op = 1
+                3:
+                    we = 1
+                    is_csr = 1
+                    csr_op = 2
+                5:
+                    we = 1
+                    is_csr = 1
+                    is_csr_imm = 1
+                    csr_op = 0
+                6:
+                    we = 1
+                    is_csr = 1
+                    is_csr_imm = 1
+                    csr_op = 1
+                7:
+                    we = 1
+                    is_csr = 1
+                    is_csr_imm = 1
+                    csr_op = 2
+                fallbackVal: illegal = 1
+        
         fallbackVal:
-            we = 0
-            mem_read = 0
-            mem_write = 0
+            illegal = 1
 end behavior
 
 end module
