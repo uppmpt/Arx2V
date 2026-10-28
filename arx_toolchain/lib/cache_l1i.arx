@@ -1,0 +1,187 @@
+module cache_l1i
+
+input:
+    clk
+    rst
+    cpu_addr [64 bits]
+    cpu_re [1 bit]
+    inv_enable [1 bit]
+    inv_addr [64 bits]
+    mem_rdata [32 bits]
+    mem_ready [1 bit]
+
+output:
+    cpu_rdata [32 bits]
+    cpu_ready [1 bit]
+    mem_addr [64 bits]
+    mem_re [1 bit]
+
+arrays:
+    cache_data [TOTAL_WORDS] [32 bits]
+    cache_tag [TAG_ARRAY_LEN] [TAG_BITS bits]
+    cache_valid [TAG_ARRAY_LEN] [1 bit]
+    fifo_way [SETS] [2 bits]
+
+wires:
+    tag [TAG_BITS bits]
+    set_idx [INDEX_BITS bits]
+    word_offset [WORD_OFFSET_BITS bits]
+    zero2 [2 bits]
+    fetch_pending [1 bit]
+    fetch_word_offset [WORD_OFFSET_BITS bits]
+
+    tag_idx_0 [TAG_IDX_BITS bits]
+    tag_idx_1 [TAG_IDX_BITS bits]
+    tag_idx_2 [TAG_IDX_BITS bits]
+    tag_idx_3 [TAG_IDX_BITS bits]
+
+    data_idx_0 [DATA_IDX_BITS bits]
+    data_idx_1 [DATA_IDX_BITS bits]
+    data_idx_2 [DATA_IDX_BITS bits]
+    data_idx_3 [DATA_IDX_BITS bits]
+
+    hit_way_0 [1 bit]
+    hit_way_1 [1 bit]
+    hit_way_2 [1 bit]
+    hit_way_3 [1 bit]
+    hit [1 bit]
+
+    active_idx_01 [DATA_IDX_BITS bits]
+    active_idx_23 [DATA_IDX_BITS bits]
+    active_idx [DATA_IDX_BITS bits]
+
+    all_valid [1 bit]
+    victim_way_v3 [2 bits]
+    victim_way_v23 [2 bits]
+    victim_way_v123 [2 bits]
+    victim_way [2 bits]
+    victim_tag_idx [TAG_IDX_BITS bits]
+    fetch_data_idx [DATA_IDX_BITS bits]
+    fetch_mem_addr [64 bits]
+
+    inv_tag [TAG_BITS bits]
+    inv_set_idx [INDEX_BITS bits]
+    inv_tag_idx_0 [TAG_IDX_BITS bits]
+    inv_tag_idx_1 [TAG_IDX_BITS bits]
+    inv_tag_idx_2 [TAG_IDX_BITS bits]
+    inv_tag_idx_3 [TAG_IDX_BITS bits]
+    inv_hit_way_0 [1 bit]
+    inv_hit_way_1 [1 bit]
+    inv_hit_way_2 [1 bit]
+    inv_hit_way_3 [1 bit]
+    inv_hit [1 bit]
+    inv_active_tag_idx_01 [TAG_IDX_BITS bits]
+    inv_active_tag_idx_23 [TAG_IDX_BITS bits]
+    inv_active_tag_idx [TAG_IDX_BITS bits]
+
+logic:
+    connect zero2 = 0
+    connect word_offset = cpu_addr[bits 5-2]
+    connect set_idx = cpu_addr[bits 11-6]
+    connect tag = cpu_addr[bits 63-12]
+
+    connect tag_idx_0 = (set_idx * 4) + 0
+    connect tag_idx_1 = (set_idx * 4) + 1
+    connect tag_idx_2 = (set_idx * 4) + 2
+    connect tag_idx_3 = (set_idx * 4) + 3
+
+    connect data_idx_0 = (tag_idx_0 * 16) + word_offset
+    connect data_idx_1 = (tag_idx_1 * 16) + word_offset
+    connect data_idx_2 = (tag_idx_2 * 16) + word_offset
+    connect data_idx_3 = (tag_idx_3 * 16) + word_offset
+
+    connect hit_way_0 = (cache_tag[tag_idx_0] == tag) logAnd (cache_valid[tag_idx_0] == 1)
+    connect hit_way_1 = (cache_tag[tag_idx_1] == tag) logAnd (cache_valid[tag_idx_1] == 1)
+    connect hit_way_2 = (cache_tag[tag_idx_2] == tag) logAnd (cache_valid[tag_idx_2] == 1)
+    connect hit_way_3 = (cache_tag[tag_idx_3] == tag) logAnd (cache_valid[tag_idx_3] == 1)
+    connect hit = hit_way_0 logOr hit_way_1 logOr hit_way_2 logOr hit_way_3
+
+    connect active_idx_01 = mux(hit_way_0) data_idx_1, data_idx_0 fallbackVal: data_idx_0
+    connect active_idx_23 = mux(hit_way_2) data_idx_3, data_idx_2 fallbackVal: data_idx_2
+    connect active_idx = mux(hit_way_0 logOr hit_way_1) active_idx_23, active_idx_01 fallbackVal: data_idx_0
+
+    connect all_valid = cache_valid[tag_idx_0] logAnd cache_valid[tag_idx_1] logAnd cache_valid[tag_idx_2] logAnd cache_valid[tag_idx_3]
+
+    connect victim_way_v3 = mux(cache_valid[tag_idx_3] == 0) fifo_way[set_idx], 3 fallbackVal: 0
+    connect victim_way_v23 = mux(cache_valid[tag_idx_2] == 0) victim_way_v3, 2 fallbackVal: 0
+    connect victim_way_v123 = mux(cache_valid[tag_idx_1] == 0) victim_way_v23, 1 fallbackVal: 0
+    connect victim_way = mux(cache_valid[tag_idx_0] == 0) victim_way_v123, 0 fallbackVal: 0
+
+    connect victim_tag_idx = (set_idx * 4) + victim_way
+    connect fetch_data_idx = (victim_tag_idx * 16) + fetch_word_offset
+    connect fetch_mem_addr = conc(zero2, fetch_word_offset, set_idx, tag)
+
+    connect inv_tag = inv_addr[bits 63-12]
+    connect inv_set_idx = inv_addr[bits 11-6]
+    connect inv_tag_idx_0 = (inv_set_idx * 4) + 0
+    connect inv_tag_idx_1 = (inv_set_idx * 4) + 1
+    connect inv_tag_idx_2 = (inv_set_idx * 4) + 2
+    connect inv_tag_idx_3 = (inv_set_idx * 4) + 3
+    connect inv_hit_way_0 = (cache_tag[inv_tag_idx_0] == inv_tag) logAnd (cache_valid[inv_tag_idx_0] == 1)
+    connect inv_hit_way_1 = (cache_tag[inv_tag_idx_1] == inv_tag) logAnd (cache_valid[inv_tag_idx_1] == 1)
+    connect inv_hit_way_2 = (cache_tag[inv_tag_idx_2] == inv_tag) logAnd (cache_valid[inv_tag_idx_2] == 1)
+    connect inv_hit_way_3 = (cache_tag[inv_tag_idx_3] == inv_tag) logAnd (cache_valid[inv_tag_idx_3] == 1)
+    connect inv_hit = inv_hit_way_0 logOr inv_hit_way_1 logOr inv_hit_way_2 logOr inv_hit_way_3
+    connect inv_active_tag_idx_01 = mux(inv_hit_way_0) inv_tag_idx_1, inv_tag_idx_0 fallbackVal: inv_tag_idx_0
+    connect inv_active_tag_idx_23 = mux(inv_hit_way_2) inv_tag_idx_3, inv_tag_idx_2 fallbackVal: inv_tag_idx_2
+    connect inv_active_tag_idx = mux(inv_hit_way_0 logOr inv_hit_way_1) inv_active_tag_idx_23, inv_active_tag_idx_01 fallbackVal: inv_tag_idx_0
+
+states:
+    IDLE
+    HIT
+    FETCH
+
+behavior on clk (posSen) or rst (posSen):
+    if (rst == 1):
+        state = IDLE
+        cpu_ready = 0
+        mem_re = 0
+        fetch_pending = 0
+        fetch_word_offset = 0
+    else:
+        when state:
+            IDLE:
+                if (inv_enable == 1):
+                    if (inv_hit == 1):
+                        cache_valid[inv_active_tag_idx] = 0
+                else if (cpu_re == 1):
+                    if (hit == 1):
+                        state = HIT
+                    else:
+                        fetch_pending = 0
+                        fetch_word_offset = 0
+                        state = FETCH
+            HIT:
+                cpu_rdata = cache_data[active_idx]
+                cpu_ready = 1
+                if (cpu_re == 0):
+                    state = IDLE
+                    cpu_ready = 0
+            FETCH:
+                if (fetch_pending == 0):
+                    mem_addr = fetch_mem_addr
+                    mem_re = 1
+                    fetch_pending = 1
+                else:
+                    if (mem_ready == 1):
+                        cache_data[fetch_data_idx] = mem_rdata
+                        if (fetch_word_offset == 15):
+                            cache_tag[victim_tag_idx] = tag
+                            cache_valid[victim_tag_idx] = 1
+                            if (all_valid == 1):
+                                fifo_way[set_idx] = fifo_way[set_idx] + 1
+                            else:
+                                fifo_way[set_idx] = 0
+                            mem_re = 0
+                            fetch_pending = 0
+                            fetch_word_offset = 0
+                            state = HIT
+                        else:
+                            mem_re = 0
+                            fetch_pending = 0
+                            fetch_word_offset = fetch_word_offset + 1
+            fallbackVal:
+                state = IDLE
+end behavior
+
+end module
