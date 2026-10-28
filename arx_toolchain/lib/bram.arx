@@ -1,0 +1,25 @@
+module bram
+
+input:
+    clk
+    we [1 bit]
+    addr [ADDR_BITS bits]
+    wdata [WIDTH bits]
+
+output:
+    rdata [WIDTH bits]
+
+arrays:
+    mem [DEPTH] [WIDTH bits]
+
+behavior on clk (posSen):
+    if (we == 1):
+        mem[addr] = wdata
+    else:
+        lock
+end behavior
+
+logic:
+    connect rdata = mem[addr]
+
+end module

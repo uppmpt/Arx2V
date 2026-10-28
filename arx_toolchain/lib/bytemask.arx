@@ -1,0 +1,54 @@
+module bytemask
+
+input:
+    data [64 bits]
+    mem_size [2 bits]
+    addr [3 bits]
+
+output:
+    masked_data [64 bits]
+    wstrb [8 bits]
+
+wires:
+    shift_by [6 bits]
+    byte_mask [8 bits]
+    half_mask [8 bits]
+    word_mask [8 bits]
+    byte_data [64 bits]
+    half_data [64 bits]
+    word_data [64 bits]
+    byte_shifted [64 bits]
+    half_shifted [64 bits]
+    word_shifted [64 bits]
+
+logic:
+    connect shift_by = mux(mem_size)
+        (addr * 8),
+        (addr[bits 2-1] * 16),
+        (addr[2] * 32),
+        0
+        fallbackVal: 0
+
+    connect byte_shifted = data <shf (addr * 8)
+    connect half_shifted = data <shf (addr[bits 2-1] * 16)
+    connect word_shifted = data <shf (addr[2] * 32)
+
+    connect byte_mask = 1 <shf addr
+    connect half_mask = 3 <shf (addr[bits 2-1] * 2)
+    connect word_mask = 15 <shf (addr[2] * 4)
+
+    connect masked_data = mux(mem_size)
+        byte_shifted,
+        half_shifted,
+        word_shifted,
+        data
+        fallbackVal: data
+
+    connect wstrb = mux(mem_size)
+        byte_mask,
+        half_mask,
+        word_mask,
+        255
+        fallbackVal: 0
+
+end module

@@ -1,0 +1,53 @@
+module signext
+
+input:
+    data [64 bits]
+    mem_size [2 bits]
+    mem_signed [1 bit]
+    addr [3 bits]
+
+output:
+    ext_data [64 bits]
+
+wires:
+    shift_by [6 bits]
+    shifted [64 bits]
+    byte_s [64 bits]
+    byte_u [64 bits]
+    half_s [64 bits]
+    half_u [64 bits]
+    word_s [64 bits]
+    word_u [64 bits]
+    byte_ext [64 bits]
+    half_ext [64 bits]
+    word_ext [64 bits]
+
+logic:
+    connect shift_by = mux(mem_size)
+        (addr * 8),
+        (addr[bits 2-1] * 16),
+        (addr[2] * 32),
+        0
+        fallbackVal: 0
+
+    connect shifted = data shf> shift_by
+
+    connect byte_s = signed(shifted[bits 7-0])
+    connect byte_u = unsigned(shifted[bits 7-0])
+    connect half_s = signed(shifted[bits 15-0])
+    connect half_u = unsigned(shifted[bits 15-0])
+    connect word_s = signed(shifted[bits 31-0])
+    connect word_u = unsigned(shifted[bits 31-0])
+
+    connect byte_ext = mux(mem_signed) byte_u, byte_s fallbackVal: byte_u
+    connect half_ext = mux(mem_signed) half_u, half_s fallbackVal: half_u
+    connect word_ext = mux(mem_signed) word_u, word_s fallbackVal: word_u
+
+    connect ext_data = mux(mem_size)
+        byte_ext,
+        half_ext,
+        word_ext,
+        data
+        fallbackVal: data
+
+end module
