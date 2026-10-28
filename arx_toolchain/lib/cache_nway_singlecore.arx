@@ -18,69 +18,92 @@ output:
     mem_we [1 bit]
     mem_wdata [WIDTH bits]
 
-# O TOTAL_LINES é calculado como SETS * WAYS
 arrays:
     cache_data [TOTAL_LINES] [WIDTH bits]
     cache_tag [TOTAL_LINES] [TAG_BITS bits]
     cache_valid [TOTAL_LINES] [1 bit]
     cache_dirty [TOTAL_LINES] [1 bit]
-    fifo_way [SETS] [WAY_BITS bits]
+    counters [TOTAL_LINES] [2 bits]
+    acc_ticks [SETS] [2 bits]
+    acc_active [SETS] [1 bit]
+    acc_victim [SETS] [2 bits]
+    last_side [SETS] [1 bit]
+    t_ff_0 [SETS] [1 bit]
+    t_ff_1 [SETS] [1 bit]
 
 wires:
     tag [TAG_BITS bits]
     set_idx [INDEX_BITS bits]
     zero_offset [2 bits]
-    
-    # Índices para cada via
     idx_way_0 [INDEX_BITS bits]
     idx_way_1 [INDEX_BITS bits]
     idx_way_2 [INDEX_BITS bits]
     idx_way_3 [INDEX_BITS bits]
-    
-    # Hit individual
     hit_way_0 [1 bit]
     hit_way_1 [1 bit]
     hit_way_2 [1 bit]
     hit_way_3 [1 bit]
     hit [1 bit]
-    
-    # Seleção da via ativa (evitando mux aninhado)
+    hit_side [1 bit]
     active_idx_01 [INDEX_BITS bits]
     active_idx_23 [INDEX_BITS bits]
     active_idx [INDEX_BITS bits]
-    active_dirty [1 bit]
-    
-    # Vítima FIFO
+    t_ff_0_plus_0 [2 bits]
+    t_ff_0_plus_1 [2 bits]
+    t_ff_1_plus_2 [2 bits]
+    t_ff_1_plus_3 [2 bits]
+    random_victim [2 bits]
+    lo_side_0 [1 bit]
+    lo_side_1 [1 bit]
+    min_side_0 [2 bits]
+    min_side_1 [2 bits]
+    final_side_0 [1 bit]
+    side0_victim [2 bits]
+    side1_victim [2 bits]
+    accumulator_victim [2 bits]
+    selected_victim [2 bits]
     victim_idx [INDEX_BITS bits]
+    victim_side [1 bit]
 
 logic:
     connect zero_offset = 0
     connect set_idx = cpu_addr[bits 9-2]
     connect tag = cpu_addr[bits 63-10]
-    
-    # Índice achatado (Set * 4 + Via)
     connect idx_way_0 = (set_idx * 4) + 0
     connect idx_way_1 = (set_idx * 4) + 1
     connect idx_way_2 = (set_idx * 4) + 2
     connect idx_way_3 = (set_idx * 4) + 3
-    
-    # Comparação paralela das Tags
     connect hit_way_0 = (cache_tag[idx_way_0] == tag) logAnd (cache_valid[idx_way_0] == 1)
     connect hit_way_1 = (cache_tag[idx_way_1] == tag) logAnd (cache_valid[idx_way_1] == 1)
     connect hit_way_2 = (cache_tag[idx_way_2] == tag) logAnd (cache_valid[idx_way_2] == 1)
     connect hit_way_3 = (cache_tag[idx_way_3] == tag) logAnd (cache_valid[idx_way_3] == 1)
-    
     connect hit = hit_way_0 logOr hit_way_1 logOr hit_way_2 logOr hit_way_3
-    
-    # Mux em árvore (evita aninhamento profundo)
+    connect hit_side = hit_way_2 logOr hit_way_3
     connect active_idx_01 = mux(hit_way_0) idx_way_1, idx_way_0 fallbackVal: idx_way_0
     connect active_idx_23 = mux(hit_way_2) idx_way_3, idx_way_2 fallbackVal: idx_way_2
     connect active_idx = mux(hit_way_0 logOr hit_way_1) active_idx_23, active_idx_01 fallbackVal: idx_way_0
-    
-    connect active_dirty = (cache_dirty[active_idx] == 1)
-    
-    # Vítima escolhida pela FIFO
-    connect victim_idx = (set_idx * 4) + fifo_way[set_idx]
+
+    # Cálculos para cada lado
+    connect t_ff_0_plus_0 = t_ff_0[set_idx] + 0
+    connect t_ff_0_plus_1 = t_ff_0[set_idx] + 1
+    connect t_ff_1_plus_2 = t_ff_1[set_idx] + 2
+    connect t_ff_1_plus_3 = t_ff_1[set_idx] + 3
+
+    # last_side=0 (último lado 0) → vítima do lado 1 (via 2 + t_ff_1)
+    # last_side=1 (último lado 1) → vítima do lado 0 (via 0 + t_ff_0)
+    connect random_victim = mux(last_side[set_idx]) t_ff_1_plus_2, t_ff_0_plus_0 fallbackVal: 0
+
+    connect lo_side_0 = (counters[idx_way_0] ≤ counters[idx_way_1])
+    connect lo_side_1 = (counters[idx_way_2] ≤ counters[idx_way_3])
+    connect min_side_0 = mux(lo_side_0) counters[idx_way_1], counters[idx_way_0] fallbackVal: 0
+    connect min_side_1 = mux(lo_side_1) counters[idx_way_3], counters[idx_way_2] fallbackVal: 0
+    connect final_side_0 = (min_side_0 ≤ min_side_1)
+    connect side0_victim = mux(lo_side_0) 1, 0 fallbackVal: 0
+    connect side1_victim = mux(lo_side_1) 3, 2 fallbackVal: 2
+    connect accumulator_victim = mux(final_side_0) side1_victim, side0_victim fallbackVal: 0
+    connect selected_victim = mux(acc_active[set_idx]) random_victim, acc_victim[set_idx] fallbackVal: 0
+    connect victim_idx = (set_idx * 4) + selected_victim
+    connect victim_side = selected_victim[1]
 
 states:
     IDLE
@@ -94,20 +117,40 @@ behavior on clk (posSen) or rst (posSen):
         cpu_ready = 0
         mem_re = 0
         mem_we = 0
-        # O reset da FIFO precisa de um estado FLUSH no hardware real.
-        # Em simulação, o Verilator inicializa tudo com 0, o que já é o suficiente.
     else:
         when state:
             IDLE:
                 if (cpu_re == 1) logOr (cpu_we == 1):
                     if (hit == 1):
+                        if (counters[active_idx] < 3):
+                            counters[active_idx] = counters[active_idx] + 1
+                        # Alterna o t_ff do lado acessado
+                        if (hit_side == 0):
+                            t_ff_0[set_idx] = t_ff_0[set_idx] bitwXor 1
+                        else:
+                            t_ff_1[set_idx] = t_ff_1[set_idx] bitwXor 1
+                        last_side[set_idx] = hit_side
+                        if (acc_active[set_idx] == 1):
+                            if (active_idx == victim_idx):
+                                acc_active[set_idx] = 0
+                                acc_ticks[set_idx] = 0
+                                counters[idx_way_0] = 0
+                                counters[idx_way_1] = 0
+                                counters[idx_way_2] = 0
+                                counters[idx_way_3] = 0
+                        else:
+                            if (acc_ticks[set_idx] == 3):
+                                acc_active[set_idx] = 1
+                                acc_victim[set_idx] = accumulator_victim
+                            else:
+                                acc_ticks[set_idx] = acc_ticks[set_idx] + 1
                         state = HIT
                     else:
+                        # Miss: usa victim_idx calculado no logic (não alterna t_ff aqui)
                         if (cache_valid[victim_idx] == 1) logAnd (cache_dirty[victim_idx] == 1):
                             state = WRITE_BACK
                         else:
                             state = FETCH
-                        
             HIT:
                 if (cpu_re == 1):
                     cpu_rdata = cache_data[active_idx]
@@ -118,7 +161,6 @@ behavior on clk (posSen) or rst (posSen):
                 if (cpu_re == 0 logAnd cpu_we == 0):
                     state = IDLE
                     cpu_ready = 0
-                    
             WRITE_BACK:
                 mem_addr = conc(zero_offset, set_idx, cache_tag[victim_idx])
                 mem_wdata = cache_data[victim_idx]
@@ -126,7 +168,6 @@ behavior on clk (posSen) or rst (posSen):
                 if (mem_ready == 1):
                     mem_we = 0
                     state = FETCH
-                    
             FETCH:
                 mem_addr = conc(zero_offset, set_idx, tag)
                 mem_re = 1
@@ -135,9 +176,13 @@ behavior on clk (posSen) or rst (posSen):
                     cache_tag[victim_idx] = tag
                     cache_valid[victim_idx] = 1
                     cache_dirty[victim_idx] = 0
-                    # Avança a FIFO (rollover automático pelos 2 bits)
-                    fifo_way[set_idx] = fifo_way[set_idx] + 1
                     mem_re = 0
+                    # Alterna o t_ff do lado da vítima (que é o novo last_side)
+                    if (victim_side == 0):
+                        t_ff_0[set_idx] = t_ff_0[set_idx] bitwXor 1
+                    else:
+                        t_ff_1[set_idx] = t_ff_1[set_idx] bitwXor 1
+                    last_side[set_idx] = victim_side
                     state = HIT
             fallbackVal:
                 state = IDLE
