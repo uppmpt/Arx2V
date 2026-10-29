@@ -1,0 +1,219 @@
+module fpu
+input:
+  op [3 bits]
+  a [WIDTH bits]
+  b [WIDTH bits]
+  c [WIDTH bits]
+output:
+  result [WIDTH bits]
+  flags [5 bits]
+
+wires:
+  sign_a [1 bit]
+  sign_b [1 bit]
+  sign_res [1 bit]
+  exp_a [EXP_W bits]
+  exp_b [EXP_W bits]
+  mant_a [MANT_W bits]
+  mant_b [MANT_W bits]
+  one_bit [1 bit]
+  one_exp [EXP_W bits]
+  bias_val [EXP_W bits]
+  
+  a_is_nan [1 bit]
+  b_is_nan [1 bit]
+  is_nan [1 bit]
+  a_is_inf [1 bit]
+  b_is_inf [1 bit]
+  a_is_zero [1 bit]
+  b_is_zero [1 bit]
+  
+  mant_a_full [MANT_EXT bits]
+  mant_b_full [MANT_EXT bits]
+  exp_diff [EXP_W bits]
+  mant_a_aligned [MANT_EXT bits]
+  mant_b_aligned [MANT_EXT bits]
+  mant_sum [MANT_SUM_W bits]
+  exp_add_res [EXP_W bits]
+  exp_add_plus_1 [EXP_W bits]
+
+  mant_a_pad [MANT_MULT bits]
+  mant_b_pad [MANT_MULT bits]
+  mant_mult [MANT_MULT bits]
+  exp_sum [EXP_W bits]
+  exp_res [EXP_W bits]
+  exp_res_plus_1 [EXP_W bits]
+  
+  # Wires da Divisao
+  mant_div_dividend [MANT_DIV bits]
+  mant_div_quotient [MANT_DIV bits]
+  mant_div_shifted [MANT_DIV bits]
+  exp_div_res [EXP_W bits]
+  exp_div_minus_1 [EXP_W bits]
+
+logic:
+  connect one_bit = 1
+  connect one_exp = 1
+  connect bias_val = BIAS
+
+  connect sign_a = a[bit SIGN_IDX]
+  connect sign_b = b[bit SIGN_IDX]
+  connect sign_res = sign_a bitwXor sign_b
+  connect exp_a = a[bits EXP_TOP-EXP_BOT]
+  connect exp_b = b[bits EXP_TOP-EXP_BOT]
+  connect mant_a = a[bits MANT_TOP-MANT_BOT]
+  connect mant_b = b[bits MANT_TOP-MANT_BOT]
+
+  connect a_is_nan = (exp_a == EXP_MAX) logAnd (mant_a != 0)
+  connect b_is_nan = (exp_b == EXP_MAX) logAnd (mant_b != 0)
+  connect is_nan = a_is_nan logOr b_is_nan
+  
+  connect a_is_inf = (exp_a == EXP_MAX) logAnd (mant_a == 0)
+  connect b_is_inf = (exp_b == EXP_MAX) logAnd (mant_b == 0)
+  
+  connect a_is_zero = (a == 0)
+  connect b_is_zero = (b == 0)
+
+  connect mant_a_full = conc(mant_a, one_bit)
+  connect mant_b_full = conc(mant_b, one_bit)
+
+  connect mant_a_pad = mant_a_full
+  connect mant_b_pad = mant_b_full
+  connect mant_mult = mant_a_pad * mant_b_pad
+  connect exp_sum = exp_a + exp_b
+  connect exp_res = exp_sum - bias_val
+  connect exp_res_plus_1 = exp_res + one_exp
+
+  # Divisao de mantissa: (mant_a_full << MANT_W) / mant_b_full
+  connect mant_div_dividend = mant_a_full <shf MANT_W
+  connect mant_div_quotient = mant_div_dividend / mant_b_full
+  connect mant_div_shifted = mant_div_quotient <shf 1
+  connect exp_div_res = exp_a - exp_b + bias_val
+  connect exp_div_minus_1 = exp_div_res - 1
+
+behavior on comb:
+  result = 0
+  flags = 0
+  
+  exp_diff = 0
+  mant_a_aligned = 0
+  mant_b_aligned = 0
+  mant_sum = 0
+  exp_add_res = 0
+  
+  if (exp_a >= exp_b):
+    exp_diff = exp_a - exp_b
+    mant_b_aligned = mant_b_full shf> exp_diff
+    mant_sum = mant_a_full + mant_b_aligned
+    exp_add_res = exp_a
+  else:
+    exp_diff = exp_b - exp_a
+    mant_a_aligned = mant_a_full shf> exp_diff
+    mant_sum = mant_b_full + mant_a_aligned
+    exp_add_res = exp_b
+
+  exp_add_plus_1 = exp_add_res + one_exp
+
+  when op:
+    0: # FADD
+      if (is_nan == 1):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_inf == 1 logAnd b_is_inf == 1 logAnd sign_a != sign_b):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_inf == 1):
+        result = a
+      else if (b_is_inf == 1):
+        result = b
+      else if (a_is_zero == 1 logAnd b_is_zero == 1):
+        result = 0
+      else:
+        when mant_sum[bit SUM_IDX]:
+          1:
+            result = conc(mant_sum[bits SUM_1_TOP-SUM_1_BOT], exp_add_plus_1, sign_a)
+          0:
+            result = conc(mant_sum[bits SUM_2_TOP-SUM_2_BOT], exp_add_res, sign_a)
+          fallbackVal:
+            result = 0
+    1: # FSUB
+      if (is_nan == 1):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_inf == 1 logAnd b_is_inf == 1 logAnd sign_a == sign_b):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_inf == 1):
+        result = a
+      else if (b_is_inf == 1):
+        result = b bitwXor SIGN_BIT
+      else:
+        when mant_sum[bit SUM_IDX]:
+          1:
+            result = conc(mant_sum[bits SUM_1_TOP-SUM_1_BOT], exp_add_plus_1, sign_a)
+          0:
+            result = conc(mant_sum[bits SUM_2_TOP-SUM_2_BOT], exp_add_res, sign_a)
+          fallbackVal:
+            result = 0
+    2: # FMUL
+      if (is_nan == 1):
+        result = CANONICAL_NAN
+        flags = 16
+      else if ((a_is_inf == 1 logAnd b_is_zero == 1) logOr (b_is_inf == 1 logAnd a_is_zero == 1)):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_inf == 1 logOr b_is_inf == 1):
+        result = mux(sign_a != sign_b) POS_INF, NEG_INF fallbackVal: NEG_INF
+      else if (a_is_zero == 1 logOr b_is_zero == 1):
+        result = 0
+      else:
+        when mant_mult[bit MULT_TOP_IDX]:
+          1:
+            result = conc(mant_mult[bits MULT_1_TOP-MULT_1_BOT], exp_res_plus_1, sign_res)
+          0:
+            result = conc(mant_mult[bits MULT_2_TOP-MULT_2_BOT], exp_res, sign_res)
+          fallbackVal:
+            result = 0
+    3: # FDIV
+      if (is_nan == 1):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_inf == 1 logAnd b_is_inf == 1):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (a_is_zero == 1 logAnd b_is_zero == 1):
+        result = CANONICAL_NAN
+        flags = 16
+      else if (b_is_zero == 1):
+        result = mux(sign_a != sign_b) POS_INF, NEG_INF fallbackVal: NEG_INF
+        flags = 2
+      else if (a_is_inf == 1):
+        result = mux(sign_a != sign_b) POS_INF, NEG_INF fallbackVal: NEG_INF
+      else if (b_is_inf == 1):
+        result = mux(sign_a != sign_b) 0, NEG_ZERO fallbackVal: NEG_ZERO
+      else:
+        when mant_div_quotient[bit MANT_W]:
+          1:
+            result = conc(mant_div_quotient[bits MANT_RES_TOP-MANT_RES_BOT], exp_div_res, sign_res)
+          0:
+            result = conc(mant_div_shifted[bits MANT_RES_TOP-MANT_RES_BOT], exp_div_minus_1, sign_res)
+          fallbackVal:
+            result = 0
+    4: # FMIN
+      if (is_nan == 1):
+        result = b
+      else if (a < b):
+        result = a
+      else:
+        result = b
+    5: # FMAX
+      if (is_nan == 1):
+        result = b
+      else if (a > b):
+        result = a
+      else:
+        result = b
+    fallbackVal:
+      result = 0
+end behavior
+end module
