@@ -19,10 +19,10 @@ class TypeChecker(ast.NodeVisitor):
                 if not self.target_type.signed:
                     raise ValueError(f"Negative constant {val} cannot be assigned to an unsigned target.")
                 bits = (abs(val) - 1).bit_length() + 1
+                return ArxType(bits, True)
             else:
                 bits = val.bit_length() if val > 0 else 1
-                if bits > self.target_type.width:
-                    return ArxType(bits, False)
+                return ArxType(bits, False)
         return self.target_type
     def visit_BinOp(self, node):
         left, right = self.visit(node.left), self.visit(node.right)
@@ -410,7 +410,7 @@ def transpile_single_module(lines):
     current_mode, block_stack, instance_mod, instance_name, instance_ports = "global", [], "", "", []
     is_comb_block = False
     for i, raw_line in enumerate(lines):
-        line_num, line, indent = line_map[i], raw_line.split('#')[0].strip(), indent_levels[i]
+        line_num, line, indent = line_map[i], raw_line.split('#')[0].split('//')[0].strip(), indent_levels[i]
         if not line or line.startswith("#"): continue
 
         if line.startswith("module"):
@@ -700,55 +700,56 @@ def transpile_to_verilog(source_code, base_dir=".", file_name="<unknown>"):
     if current_module: modules.append(current_module)
 
     # --- INÍCIO DO PASSE DE PARAMETRIZAÇÃO POR INSTÂNCIA ---
-    module_dict = {}
-    for mod_lines in modules:
-        for line in mod_lines:
-            m = re.match(r"^module\s+(\w+)", line.strip())
-            if m:
-                module_dict[m.group(1)] = list(mod_lines)
-                break
+    while True:
+        module_dict = {}
+        for mod_lines in modules:
+            for line in mod_lines:
+                m = re.match(r"^module\s+(\w+)", line.strip())
+                if m:
+                    module_dict[m.group(1)] = list(mod_lines)
+                    break
 
-    new_modules_to_add = {}
-    modules_to_remove = set()
-    for mod_lines in modules:
-        for i, line in enumerate(mod_lines):
-            # Regex: instance NomeModulo(P1=V1, P2=V2) as NomeInstancia:
-            m_inst = re.match(r"^(\s*)instance\s+(\w+)\s*\(([^)]+)\)\s*as\s+([\w\[\]]+):\s*(#.*)?$", line)
-            if m_inst:
-                indent, target_mod, params_str, inst_name, comment = m_inst.groups()
-                inst_name_clean = inst_name.replace("[", "_").replace("]", "")
+        new_modules_to_add = {}
+        modules_to_remove = set()
+        found_any = False
+        
+        for mod_lines in modules:
+            for i, line in enumerate(mod_lines):
+                m_inst = re.match(r"^(\s*)instance\s+(\w+)\s*\(([^)]+)\)\s*as\s+([\w\[\]]+):\s*(#.*)?$", line)
+                if m_inst:
+                    indent, target_mod, params_str, inst_name, comment = m_inst.groups()
+                    inst_name_clean = inst_name.replace("[", "_").replace("]", "")
 
-                if target_mod in module_dict:
-                    new_mod_name = f"{target_mod}_{inst_name_clean}"
-                    
-                    inst_params = {}
-                    for p in params_str.split(','):
-                        if '=' in p:
-                            k, v = p.split('=')
-                            inst_params[k.strip()] = v.strip()
+                    if target_mod in module_dict:
+                        found_any = True
+                        new_mod_name = f"{target_mod}_{inst_name_clean}"
+                        
+                        inst_params = {}
+                        for p in params_str.split(','):
+                            if '=' in p:
+                                k, v = p.split('=')
+                                inst_params[k.strip()] = v.strip()
 
-                    if new_mod_name not in new_modules_to_add:
-                        new_mod_lines = []
-                        for t_line in module_dict[target_mod]:
-                            # Muda o nome do módulo (ex: module cache_l1 -> module cache_l1_icache)
-                            if re.match(r"^\s*module\s+" + target_mod + r"\b", t_line):
-                                new_mod_lines.append(re.sub(r"^(\s*)module\s+" + target_mod, r"\1module " + new_mod_name, t_line))
-                            else:
-                                # Substitui os parâmetros no corpo do módulo duplicado
-                                t_line_new = t_line
-                                for k, v in inst_params.items():
-                                    t_line_new = re.sub(r'\b' + k + r'\b', v, t_line_new)
-                                new_mod_lines.append(t_line_new)
-                        new_modules_to_add[new_mod_name] = new_mod_lines
-                        modules_to_remove.add(target_mod)
+                        if new_mod_name not in new_modules_to_add:
+                            new_mod_lines = []
+                            for t_line in module_dict[target_mod]:
+                                if re.match(r"^\s*module\s+" + target_mod + r"\b", t_line):
+                                    new_mod_lines.append(re.sub(r"^(\s*)module\s+" + target_mod, r"\1module " + new_mod_name, t_line))
+                                else:
+                                    t_line_new = t_line
+                                    for k, v in inst_params.items():
+                                        t_line_new = re.sub(r'\b' + k + r'\b', v, t_line_new)
+                                    new_mod_lines.append(t_line_new)
+                            new_modules_to_add[new_mod_name] = new_mod_lines
+                            modules_to_remove.add(target_mod)
 
-                    # Atualiza a linha da instância para apontar para o módulo customizado
-                    mod_lines[i] = f"{indent}instance {new_mod_name} as {inst_name}:{comment if comment else ''}"
-
-    # Remove o módulo base original para não dar erro de parâmetro não resolvido
-    modules = [m for m in modules if not (len(m) > 0 and re.match(r"^module\s+(\w+)", m[0].strip()) and re.match(r"^module\s+(\w+)", m[0].strip()).group(1) in modules_to_remove)]
-    
-    modules.extend(new_modules_to_add.values())
+                        mod_lines[i] = f"{indent}instance {new_mod_name} as {inst_name}:{comment if comment else ''}"
+        
+        if not found_any:
+            break
+            
+        modules = [m for m in modules if not (len(m) > 0 and re.match(r"^module\s+(\w+)", m[0].strip()) and re.match(r"^module\s+(\w+)", m[0].strip()).group(1) in modules_to_remove)]
+        modules.extend(new_modules_to_add.values())
     # --- FIM DO PASSE DE PARAMETRIZAÇÃO POR INSTÂNCIA ---
 
     out_verilog, all_warnings = [], []
@@ -1159,7 +1160,7 @@ def list_modules():
     print()
 
 def start_repl():
-    print("Welcome to Arx2V compiler v3.1")
+    print("Welcome to Arx2V compiler v5.0")
     print("Commands: compile <file> | sim <file> [tb.v] | inspect <module> | modules | generate testbench for <file> | syntaxes | exit")
     print()
     while True:
