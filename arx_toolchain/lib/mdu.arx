@@ -1,0 +1,73 @@
+module mdu
+input:
+  op [3 bits]
+  rs1 [XLEN bits] signed
+  rs2 [XLEN bits] signed
+output:
+  result [XLEN bits] signed
+
+wires:
+  rs1_s_ext [XLEN_2X bits] signed
+  rs2_s_ext [XLEN_2X bits] signed
+  rs1_u_ext [XLEN_2X bits]
+  rs2_u_ext [XLEN_2X bits]
+  mult_ss [XLEN_2X bits] signed
+  mult_su [XLEN_2X bits] signed
+  mult_uu [XLEN_2X bits]
+  zero_s [XLEN bits] signed
+  minus_one [XLEN bits] signed
+  int_min_val [XLEN bits] signed
+
+logic:
+  connect zero_s = 0
+  connect minus_one = -1
+  connect int_min_val = INT_MIN_VAL
+
+  connect rs1_s_ext = signed(rs1)
+  connect rs2_s_ext = signed(rs2)
+  connect rs1_u_ext = unsigned(rs1)
+  connect rs2_u_ext = unsigned(rs2)
+
+  connect mult_ss = rs1_s_ext * rs2_s_ext
+  connect mult_su = rs1_s_ext * signed(rs2_u_ext)
+  connect mult_uu = rs1_u_ext * rs2_u_ext
+
+behavior on comb:
+  result = 0
+  when op:
+    0: # MUL
+      result = mult_ss[bits MUL_LOW_TOP-MUL_LOW_BOT]
+    1: # MULH
+      result = mult_ss[bits MUL_HIGH_TOP-MUL_HIGH_BOT]
+    2: # MULHSU
+      result = mult_su[bits MUL_HIGH_TOP-MUL_HIGH_BOT]
+    3: # MULHU
+      result = mult_uu[bits MUL_HIGH_TOP-MUL_HIGH_BOT]
+    4: # DIV
+      if (rs2 == zero_s):
+        result = minus_one
+      else if (rs1 == int_min_val logAnd rs2 == minus_one):
+        result = int_min_val
+      else:
+        result = rs1 / rs2
+    5: # DIVU
+      if (rs2 == zero_s):
+        result = minus_one
+      else:
+        result = signed(unsigned(rs1) / unsigned(rs2))
+    6: # REM
+      if (rs2 == zero_s):
+        result = rs1
+      else if (rs1 == int_min_val logAnd rs2 == minus_one):
+        result = 0
+      else:
+        result = rs1 - ((rs1 / rs2) * rs2)
+    7: # REMU
+      if (rs2 == zero_s):
+        result = rs1
+      else:
+        result = signed(unsigned(rs1) - ((unsigned(rs1) / unsigned(rs2)) * unsigned(rs2)))
+    fallbackVal:
+      result = 0
+end behavior
+end module
